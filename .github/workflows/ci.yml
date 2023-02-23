@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+  packages: write
+
+jobs:
+  build:
+    name: lint + vet + test + cover + check-adrs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: make ci-local
+
+      - name: Compute coverage percentage
+        id: coverage
+        run: |
+          if [ ! -f coverage.out ] || [ "$(wc -l < coverage.out | tr -d ' ')" -le 1 ]; then
+            echo "value=0" >> "$GITHUB_OUTPUT"
+            echo "color=lightgrey" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          total=$(go tool cover -func=coverage.out | awk '/^total:/{print $3}' | tr -d '%')
+          if [ -z "$total" ]; then
+            echo "value=0" >> "$GITHUB_OUTPUT"
+            echo "color=lightgrey" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "value=$total" >> "$GITHUB_OUTPUT"
+          if awk "BEGIN{exit ! ($total >= 90)}"; then
+            echo "color=brightgreen" >> "$GITHUB_OUTPUT"
+          elif awk "BEGIN{exit ! ($total >= 80)}"; then
+            echo "color=green" >> "$GITHUB_OUTPUT"
+          elif awk "BEGIN{exit ! ($total >= 70)}"; then
+            echo "color=yellow" >> "$GITHUB_OUTPUT"
+          else
+            echo "color=red" >> "$GITHUB_OUTPUT"
+          fi
+
+      # On main: write coverage.json to the orphan `badges` branch so
+      # shields.io can render the badge from the raw GitHub URL. Uses
+      # the built-in GITHUB_TOKEN (no PAT, no repo secret). The badges
+      # branch does not match the trigger filter above so this push
+      # does not loop the workflow.
+      - name: Update coverage badge branch
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          COV_VALUE: ${{ steps.coverage.outputs.value }}
+          COV_COLOR: ${{ steps.coverage.outputs.color }}
+        run: |
+          if ! git ls-remote --exit-code --heads origin badges >/dev/null 2>&1; then
+            echo "badges branch does not exist yet -- skipping"
+            exit 0
+          fi
+          git fetch origin badges
+          git worktree add ../badges-wt badges
+          cat > ../badges-wt/coverage.json << EOF
+          {"schemaVersion":1,"label":"coverage","message":"${COV_VALUE}%","color":"${COV_COLOR}"}
+          EOF
+          cd ../badges-wt
+          if git diff --quiet; then
+            echo "coverage unchanged -- no commit"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add coverage.json
+          git commit -m "ci(coverage): ${COV_VALUE}% on ${GITHUB_SHA:0:8}"
+          git push origin badges
+
+      - name: Post coverage on PR
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: coverage
+          message: |
+            **Coverage**: ${{ steps.coverage.outputs.value }}% (floor: 80%)
+
+# The image-publish job from the markup-svc + traffic-gen workflow
+# lands here once the Dockerfile + cmd/decision-gateway main ship in
+# a later release window. The tags: ['v*'] trigger above stays from
+# day one so the future image-publish job inherits the right shape
+# without a retroactive fix (see markup-svc v0.1.2 lesson).

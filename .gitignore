@@ -1,0 +1,13 @@
+# Local-only files (never commit; see ROADMAP.local.md for context)
+*.local.md
+
+# Build outputs
+/decision-gateway
+
+# Coverage outputs
+coverage.out
+
+# OS / editor artifacts
+.DS_Store
+.idea/
+*.swp
