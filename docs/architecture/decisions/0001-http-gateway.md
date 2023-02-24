@@ -122,7 +122,7 @@ A scientific harness for the gateway is out of scope for v0.0.1. If the gateway 
 ### Validation strategy
 
 - `internal/gateway`: unit tests for the `Router.Match` selection logic. Cover:
-  - Empty route list → `Match` returns `false` for any path.
+  - Empty route list → `NewRouter` returns an error (rejecting at construction surfaces operator misconfiguration loudly rather than producing a silent always-404 gateway).
   - Single route → `Match` returns the route for any path matching the prefix.
   - Two non-overlapping routes → `Match` returns the right route per path.
   - Two overlapping routes (`/decide` and `/decide/v2`) → longest-prefix wins.
