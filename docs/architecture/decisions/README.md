@@ -19,4 +19,4 @@ NNNN-short-decision-name.md
 
 | # | Title | Status |
 |---|---|---|
-| [0001](0001-http-gateway.md) | HTTP gateway for the Pricing Decision Platform | 🟡 Proposed |
+| [0001](0001-http-gateway.md) | HTTP gateway for the Pricing Decision Platform | ✅ Accepted |
