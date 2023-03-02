@@ -20,6 +20,10 @@ Hexagonal. `internal/gateway.Route` declares a path prefix and a backend URL; `i
 
 See [`docs/architecture/decisions/`](docs/architecture/decisions/). ADR-0001 covers the custom-vs-off-the-shelf decision and the v0.0.1 menu.
 
+## Cookbook
+
+See [`docs/cookbook/`](docs/cookbook/). The day-one recipe walks through running markup-svc + decision-gateway + traffic-gen on one host and confirming the JSON access events flow.
+
 ## Standing rules
 
 Inherited from markup-svc and traffic-gen:
