@@ -4,21 +4,52 @@ HTTP front door for the Pricing Decision Platform. Routes incoming `/decide` and
 
 ## Status
 
-Pre-release. This is the day-one scaffold: ADR-0001 (Proposed) describes the v0.0.1 feature set (reverse proxy + correlation-ID middleware + structured access log + `/healthz` + `/readyz`) and the custom-Go-gateway-vs-off-the-shelf tradeoff. The first adapter and `cmd/decision-gateway` land in subsequent commits of the same release window.
+Pre-release. The v0.0.1 surface from ADR-0001 ships in the current development cycle: longest-prefix Router + per-route `httputil.ReverseProxy` adapter + correlation-ID middleware + JSON access log middleware + `/healthz` / `/readyz` probes + flag-driven cmd binary. Tag `v0.0.1` lands once the Dockerfile + image-publish workflow update + docker-compose rewire land.
+
+```sh
+./decision-gateway \
+  --listen=:8090 \
+  "--route=/decide=>http://markup-svc:8080" \
+  "--route=/admin=>http://markup-svc:8080"
+```
+
+The boot event lands on stdout as one JSON line describing the listen address, route table, and backend timeout. Each request emits one `gateway.access` JSON line with `method`, `path`, `status`, `duration_ms`, `route`, `correlation_id`.
+
+## Capability matrix
+
+| Capability | Surface | Status |
+|---|---|---|
+| Longest-prefix Router | `internal/gateway.Route` + `internal/gateway.Router` | ✅ |
+| Reverse-proxy adapter (per-route `httputil.ReverseProxy`) | `internal/proxy` | ✅ |
+| Correlation-ID middleware (read `X-Correlation-ID` or mint UUID v4) | `internal/middleware.CorrelationID` | ✅ |
+| Structured JSON access log (interops with traffic-gen `jsonlog` schema) | `internal/middleware.AccessLog` | ✅ |
+| `/healthz` + `/readyz` probes (matches markup-svc ADR-0013 shape) | `internal/httpapi.Healthz` + `Readyz` | ✅ |
+| Flag-driven cmd (`--listen`, `--route` repeatable, `--backend-timeout`) | `cmd/decision-gateway` | ✅ |
+| Dockerfile + image-publish CI | `cmd/decision-gateway/Dockerfile` + workflow | ⏳ next release window |
+| docker-compose stack (markup-svc + gateway + traffic-gen) | `docker-compose.yaml` | ⏳ next release window |
+| mTLS / JWT / WAF | not yet | ⏳ deferred to its own ADR when a real consumer asks |
+| Retries / circuit breakers / weighted routing | not yet | ⏳ deferred per ADR-0001 NOT-closed |
+| Hot reload of the route table (e.g., `POST /admin/routes`) | not yet | ⏳ deferred per ADR-0001 NOT-closed |
 
 ## Architecture
 
-Hexagonal. `internal/gateway.Route` declares a path prefix and a backend URL; `internal/gateway.Router` selects a Route by longest-prefix match; the HTTP integration (a future commit) wraps `httputil.ReverseProxy` per route and composes correlation-ID + structured-log middleware around it.
+Hexagonal. `internal/gateway.Route` declares a path prefix and a backend URL; `internal/gateway.Router` selects a Route by longest-prefix match; `internal/proxy.Handler` wraps the Router in an `http.Handler` that forwards via a per-route `httputil.ReverseProxy`. The cross-cutting middlewares live in `internal/middleware`; the gateway's own HTTP endpoints (`/healthz`, `/readyz`) live in `internal/httpapi`. `cmd/decision-gateway` is the application: flag parsing, lifecycle, structured boot event.
 
 | Package | Role |
 |---|---|
-| `internal/gateway` | domain: `Route`, `Router`, the matching logic |
+| `internal/gateway` | domain: `Route`, `Router`, longest-prefix-match selection logic |
+| `internal/middleware` | cross-cutting HTTP: correlation-ID propagation + structured JSON access log + `RouteRecorder` interface for inner-to-outer route stamping |
+| `internal/proxy` | reverse-proxy adapter: per-route `httputil.ReverseProxy`, correlation-ID propagation to backend, route stamping on writer |
+| `internal/httpapi` | gateway-owned HTTP endpoints: `Healthz`, `Readyz` (probes shaped to match markup-svc ADR-0013) |
+| `cmd/decision-gateway` | application: `--listen`, `--route` repeatable, `--backend-timeout`; main/run split mirroring markup-svc and traffic-gen |
 
-(More rows land as the HTTP middleware and the reverse-proxy adapter ship.)
+## Composition order
+
+Wire `CorrelationID` OUTSIDE `AccessLog`. Go's `http.Request.WithContext` does not propagate inner-frame context mutations back out, so `AccessLog` reads the correlation ID from the request context only when stashed by a middleware that sits above it. The matched-route value flows the opposite way (inner-to-outer) via the writer-side `RouteRecorder` interface the proxy stamps. See [`internal/middleware/doc.go`](internal/middleware/doc.go) for the full rationale.
 
 ## Architecture decision records
 
-See [`docs/architecture/decisions/`](docs/architecture/decisions/). ADR-0001 covers the custom-vs-off-the-shelf decision and the v0.0.1 menu.
+See [`docs/architecture/decisions/`](docs/architecture/decisions/). ADR-0001 (Accepted) covers the custom-vs-off-the-shelf decision and the v0.0.1 menu.
 
 ## Cookbook
 
