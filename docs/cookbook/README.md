@@ -7,6 +7,7 @@ Operator-level recipes for putting the gateway in front of markup-svc (and any f
 | Recipe | When to use |
 |---|---|
 | [three-service-smoke.md](three-service-smoke.md) | Run markup-svc + decision-gateway + traffic-gen on one host and verify the wire works end-to-end |
+| [compose-stack.md](compose-stack.md) | Bring the full platform up in one command via `docker compose up` (uses the published ghcr.io images) |
 
 ## How these recipes are written
 

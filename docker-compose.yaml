@@ -1,0 +1,61 @@
+# Canonical three-service stack for the Pricing Decision Platform.
+#
+# Layout:
+#   traffic-gen -> decision-gateway -> markup-svc
+#                     |
+#                     +-- correlation ID propagation
+#                     +-- one gateway.access JSON line per request
+#
+# Pulls public images from ghcr.io; all three are public so operators
+# do not need to clone any repo to run a smoke. The decision-gateway
+# image is the canonical 'front door' for the platform; the older
+# two-service compose in the traffic-gen repo stays for operators
+# who want to smoke-test traffic-gen against markup-svc directly
+# without a gateway in between.
+#
+# Usage:
+#   docker compose up                          # foreground; both services + logs
+#   docker compose up -d                       # detached; long-run mode
+#   docker compose logs -f decision-gateway    # JSON access events from the gateway
+#   docker compose down                        # stop and remove
+#
+# See docs/cookbook/compose-stack.md for the operator walkthrough.
+
+services:
+  markup-svc:
+    image: ghcr.io/helmedeiros/markup-svc:v0.1.4
+    command:
+      - --rules=/etc/markup/rules.csv
+      - --listen=:8080
+    volumes:
+      - ./compose-fixtures/rules.csv:/etc/markup/rules.csv:ro
+    # No host port exposure: traffic flows through the gateway. An
+    # operator wanting direct access (e.g., to inspect markup-svc's
+    # /admin endpoints without the gateway in the way) overrides
+    # the ports map in a compose.override.yaml.
+
+  decision-gateway:
+    image: ghcr.io/helmedeiros/decision-gateway:v0.0.1
+    depends_on:
+      - markup-svc
+    command:
+      - --listen=:8090
+      - --route=/decide=>http://markup-svc:8080
+      - --route=/admin=>http://markup-svc:8080
+      - --backend-timeout=5s
+    ports:
+      - "8090:8090"
+
+  traffic-gen:
+    image: ghcr.io/helmedeiros/traffic-gen:v0.0.2
+    depends_on:
+      - decision-gateway
+    command:
+      # Default to a 5-minute exponential ramp from 10 to 500 QPS,
+      # then hold 500 QPS until the operator stops the stack.
+      # Operators wanting a different shape override `command` in a
+      # compose.override.yaml or pass extra args to
+      # `docker compose run traffic-gen`.
+      - --target=http://decision-gateway:8090/decide
+      - --profile=exp:10->500@5m
+      - --preset=default
