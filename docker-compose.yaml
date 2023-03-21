@@ -23,10 +23,34 @@
 
 services:
   markup-svc:
-    image: ghcr.io/helmedeiros/markup-svc:v0.1.4
+    image: ghcr.io/helmedeiros/markup-svc:v0.1.5
     command:
       - --rules=/etc/markup/rules.csv
       - --listen=:8080
+      - --otel-enabled
+    environment:
+      # OTel SDK env vars per markup-svc ADR-0009 + ADR-0016. v0.1.5
+      # bootstraps an OTLP gRPC exporter + batched TracerProvider in
+      # the binary when --otel-enabled is set; earlier tags shipped
+      # the decorator only and dropped spans on the no-op provider.
+      # Traces flow to the pricing-observability OTel Collector which
+      # forwards to Jaeger with Elasticsearch storage per that repo's
+      # ADR-0002. The Collector binds host port 4317 (gRPC) in the
+      # observability compose; markup-svc reaches it via
+      # host.docker.internal since the platform compose and the
+      # observability compose run on different Docker networks. When
+      # the observability stack is NOT running, the OTel SDK retries
+      # the export with exponential backoff and logs a warning --
+      # /decide stays up.
+      - OTEL_SERVICE_NAME=markup-svc
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://host.docker.internal:4317
+      - OTEL_EXPORTER_OTLP_PROTOCOL=grpc
+      - OTEL_TRACES_SAMPLER=parentbased_always_on
+    extra_hosts:
+      # host.docker.internal is Docker Desktop's host alias. On Linux
+      # docker, the host-gateway IP works the same way once compose
+      # adds the extra_hosts mapping.
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./compose-fixtures/rules.csv:/etc/markup/rules.csv:ro
     # No host port exposure: traffic flows through the gateway. An
