@@ -19,7 +19,9 @@ import (
 	"github.com/helmedeiros/decision-gateway/internal/gateway"
 	"github.com/helmedeiros/decision-gateway/internal/httpapi"
 	"github.com/helmedeiros/decision-gateway/internal/middleware"
+	gwotel "github.com/helmedeiros/decision-gateway/internal/observability/otel"
 	"github.com/helmedeiros/decision-gateway/internal/proxy"
+	"go.opentelemetry.io/otel/trace"
 )
 
 func main() {
@@ -57,6 +59,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	fs.SetOutput(stderr)
 	listen := fs.String("listen", ":8090", "HTTP listen address")
 	backendTimeout := fs.Duration("backend-timeout", 5*time.Second, "per-request response-header timeout on outbound requests to backends")
+	otelEnabled := fs.Bool("otel-enabled", false, "emit OpenTelemetry spans + propagate W3C trace context to upstreams via OTLP gRPC; reads OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_SERVICE_NAME etc. per the OTel SDK conventions. See ADR-0002.")
 	var routeSpecs routeFlagList
 	fs.Var(&routeSpecs, "route", "repeatable; format: PREFIX=>BACKEND_URL (e.g., /decide=>http://markup-svc:8080). See ADR-0001.")
 	if err := fs.Parse(args); err != nil {
@@ -71,7 +74,26 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("build router: %w", err)
 	}
-	proxyHandler, err := proxy.New(router, *backendTimeout)
+
+	var tracer trace.Tracer
+	var transportWrapper func(http.RoundTripper) http.RoundTripper
+	if *otelEnabled {
+		t, shutdown, err := gwotel.Bootstrap(ctx, "github.com/helmedeiros/decision-gateway/cmd/decision-gateway")
+		if err != nil {
+			return fmt.Errorf("otel bootstrap: %w", err)
+		}
+		tracer = t
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = shutdown(shutdownCtx)
+		}()
+		transportWrapper = func(rt http.RoundTripper) http.RoundTripper {
+			return &gwotel.InstrumentedTransport{Tracer: tracer, Inner: rt}
+		}
+	}
+
+	proxyHandler, err := proxy.New(router, *backendTimeout, transportWrapper)
 	if err != nil {
 		return fmt.Errorf("build proxy: %w", err)
 	}
@@ -84,12 +106,19 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	// and /readyz win their exact-path matches first.
 	mux.Handle("/", proxyHandler)
 
-	// Composition order matters: CorrelationID OUTSIDE AccessLog so
-	// AccessLog reads the correlation ID from the request context
-	// inside the correlation-ID frame. The matched-route value flows
-	// the opposite way via the writer-side RouteRecorder interface
-	// the proxy stamps. See internal/middleware/doc.go.
-	handler := middleware.CorrelationID(middleware.AccessLog(stdout, nil, mux))
+	// Composition order: CorrelationID OUTSIDE Tracing OUTSIDE AccessLog.
+	// CorrelationID first so the correlation ID is in the request
+	// context when the span starts. Tracing inside CorrelationID so
+	// the span sits in that frame, and outside AccessLog so the span
+	// covers AccessLog's window (the gateway.duration_ms span
+	// attribute matches the access event's duration_ms by
+	// construction). When --otel-enabled is not set the Tracing
+	// frame is skipped entirely so the path stays zero-overhead.
+	var inner http.Handler = middleware.AccessLog(stdout, nil, mux)
+	if tracer != nil {
+		inner = gwotel.Middleware(tracer, inner)
+	}
+	handler := middleware.CorrelationID(inner)
 
 	srv := &http.Server{
 		Addr:              *listen,

@@ -7,6 +7,29 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.0.2] - 2023-03-22
+
+Tracing release. The gateway becomes a W3C trace context hop: `--otel-enabled` bootstraps an OTLP gRPC TracerProvider + propagator, emits one `gateway.request` server span per inbound request, opens a `gateway.proxy.upstream` client span per upstream call, and injects the `traceparent` header on the proxied request so the upstream service (markup-svc v0.1.5+) joins the same trace. Operators investigating bottlenecks now see the gateway / engine cost split as two stacked bars in Jaeger UI instead of treating the gateway as a black box. Closes the gap pricing-observability ADR-0002 left for the platform's front door.
+
+### Added
+
+- `internal/observability/otel/`: new package with three files.
+  - `bootstrap.go`: `Bootstrap(ctx, instrumentationName) (trace.Tracer, Shutdown, error)`. Constructs the OTLP gRPC exporter, the batched `sdktrace.TracerProvider`, the detected resource, the global W3C TraceContext + Baggage propagator. Same shape as markup-svc's ADR-0016 bootstrap with the propagator addition (the gateway is a trace-context hop; markup-svc was a leaf).
+  - `middleware.go`: `Middleware(tracer, http.Handler) http.Handler`. Extracts incoming trace context, opens a `gateway.request` span, wraps the response writer in a `statusWriter` that captures status + implements the `RouteRecorder` interface the proxy already uses. Sets `http.method` / `http.target` / `http.status_code` / `http.route` / `gateway.duration_ms` attributes and Error status on 5xx.
+  - `transport.go`: `InstrumentedTransport{Tracer, Inner}` implementing `http.RoundTripper`. Opens a `gateway.proxy.upstream` client span per outbound call, injects `traceparent` via the global propagator, sets `upstream.status_code` from the response.
+- `--otel-enabled` flag on `cmd/decision-gateway`: bootstraps the OTel SDK, wires the middleware + transport wrapper. Without the flag, no OTel code is in the request path (zero overhead, preserves the v0.0.1 behavior).
+- `docker-compose.yaml`: gateway service gains `--otel-enabled` + `OTEL_SERVICE_NAME=decision-gateway` + `OTEL_EXPORTER_OTLP_ENDPOINT=http://host.docker.internal:4317` + `OTEL_EXPORTER_OTLP_PROTOCOL=grpc` + `OTEL_TRACES_SAMPLER=parentbased_always_on` + `extra_hosts: host.docker.internal:host-gateway` (matches the markup-svc service wiring).
+- ADR-0002 (Accepted): gateway-side OTel tracing + W3C trace context propagation. Three design questions answered: custom middleware vs `otelhttp` contrib (pick custom; 50 LOC matching the project's small-middleware shape vs a third dep tree), root-only span vs root + upstream child (pick two spans; the delta is the gateway-overhead the operator wants), middleware vs RoundTripper as the child-span site (pick RoundTripper; the window is exactly the upstream cost, propagator inject happens at header-finalization).
+
+### Changed
+
+- `internal/proxy/proxy.New` signature gains a third parameter `transportWrapper func(http.RoundTripper) http.RoundTripper`. `nil` keeps the v0.0.1 behavior; the OTel-enabled binary passes a closure that builds the `InstrumentedTransport`. Test callers updated.
+- Middleware composition order: `CorrelationID(Middleware(AccessLog(mux)))` when `--otel-enabled` is set (was `CorrelationID(AccessLog(mux))` and stays that way when the flag is off). The span surrounds AccessLog so `gateway.duration_ms` on the span matches `attrs.duration_ms` on the access event by construction.
+
+### Dependencies
+
+- `go.opentelemetry.io/otel` v1.11.2, `go.opentelemetry.io/otel/sdk` v1.11.2, `go.opentelemetry.io/otel/trace` v1.11.2, `go.opentelemetry.io/otel/exporters/otlp/otlptrace` v1.11.2 + `otlptracegrpc` v1.11.2. Transitive: `google.golang.org/grpc` v1.51.0, `google.golang.org/protobuf` v1.28.1. Matches the markup-svc + pricing-observability OTel version line.
+
 ## [0.0.1] - 2023-03-10
 
 First public release. decision-gateway ships as the HTTP front door for the Pricing Decision Platform: a custom Go reverse-proxy gateway with correlation-ID propagation, a structured JSON access log per request, `/healthz` + `/readyz` probes, and a flag-driven cmd binary that operators run alongside markup-svc (or any future decision-shaped backend).

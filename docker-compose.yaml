@@ -59,7 +59,7 @@ services:
     # the ports map in a compose.override.yaml.
 
   decision-gateway:
-    image: ghcr.io/helmedeiros/decision-gateway:v0.0.1
+    image: ghcr.io/helmedeiros/decision-gateway:v0.0.2
     depends_on:
       - markup-svc
     command:
@@ -67,6 +67,23 @@ services:
       - --route=/decide=>http://markup-svc:8080
       - --route=/admin=>http://markup-svc:8080
       - --backend-timeout=5s
+      - --otel-enabled
+    environment:
+      # OTel SDK env vars per decision-gateway ADR-0002. The gateway
+      # becomes a trace-context hop: it extracts incoming W3C
+      # traceparent (set by traffic-gen in v0.0.3+), opens a
+      # gateway.request span, opens a gateway.proxy.upstream child
+      # span around the markup-svc call, and injects traceparent on
+      # the outbound request so markup-svc joins the same trace.
+      # The Collector binds host port 4317 (gRPC); the gateway reaches
+      # it via host.docker.internal since the platform compose and
+      # the observability compose run on different Docker networks.
+      - OTEL_SERVICE_NAME=decision-gateway
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://host.docker.internal:4317
+      - OTEL_EXPORTER_OTLP_PROTOCOL=grpc
+      - OTEL_TRACES_SAMPLER=parentbased_always_on
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8090:8090"
 

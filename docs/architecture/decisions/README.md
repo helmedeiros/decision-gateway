@@ -20,3 +20,4 @@ NNNN-short-decision-name.md
 | # | Title | Status |
 |---|---|---|
 | [0001](0001-http-gateway.md) | HTTP gateway for the Pricing Decision Platform | ✅ Accepted |
+| [0002](0002-otel-tracing.md) | Gateway-side OTel tracing + W3C trace context propagation | ✅ Accepted |

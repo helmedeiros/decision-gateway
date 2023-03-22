@@ -29,13 +29,21 @@ type Handler struct {
 // and reused for every matching request; httputil.ReverseProxy
 // internally pools connections so the steady-state cost is one
 // reused HTTP/1.1 connection per backend.
-func New(router *gateway.Router, backendTimeout time.Duration) (*Handler, error) {
+//
+// transportWrapper, when non-nil, wraps each per-route reverse proxy's
+// outbound RoundTripper. The OTel-enabled binary passes
+// internal/observability/otel.InstrumentedTransport here so the
+// upstream call carries a traceparent header and emits a
+// gateway.proxy.upstream child span (see ADR-0002). When nil, the
+// proxies use the default Transport unchanged so the OTel-disabled
+// path stays zero-overhead.
+func New(router *gateway.Router, backendTimeout time.Duration, transportWrapper func(http.RoundTripper) http.RoundTripper) (*Handler, error) {
 	if router == nil {
 		return nil, fmt.Errorf("router is required")
 	}
 	proxies := make(map[string]*httputil.ReverseProxy, len(router.Routes()))
 	for _, route := range router.Routes() {
-		rp := newReverseProxy(route.Backend, backendTimeout)
+		rp := newReverseProxy(route.Backend, backendTimeout, transportWrapper)
 		proxies[route.Prefix] = rp
 	}
 	return &Handler{
@@ -75,7 +83,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // URL.Scheme, URL.Host, and Host header from backend; URL.Path is
 // preserved verbatim so the backend sees the same path the client
 // requested.
-func newReverseProxy(backend *url.URL, timeout time.Duration) *httputil.ReverseProxy {
+func newReverseProxy(backend *url.URL, timeout time.Duration, transportWrapper func(http.RoundTripper) http.RoundTripper) *httputil.ReverseProxy {
 	rp := httputil.NewSingleHostReverseProxy(backend)
 	// httputil.NewSingleHostReverseProxy's default Director rewrites
 	// scheme, host, and URL.Path; we keep the path-rewrite default
@@ -87,11 +95,16 @@ func newReverseProxy(backend *url.URL, timeout time.Duration) *httputil.ReverseP
 	// http://markup-svc:8080 as the backend. Documented here so a
 	// future refactor that adds a backend Path does not accidentally
 	// prepend it.
+	var base http.RoundTripper = http.DefaultTransport
 	if timeout > 0 {
-		rp.Transport = &http.Transport{
+		base = &http.Transport{
 			ResponseHeaderTimeout: timeout,
 		}
 	}
+	if transportWrapper != nil {
+		base = transportWrapper(base)
+	}
+	rp.Transport = base
 	return rp
 }
 
