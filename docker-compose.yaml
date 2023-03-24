@@ -23,7 +23,7 @@
 
 services:
   markup-svc:
-    image: ghcr.io/helmedeiros/markup-svc:v0.1.5
+    image: ghcr.io/helmedeiros/markup-svc:v0.1.6
     command:
       - --rules=/etc/markup/rules.csv
       - --listen=:8080
@@ -88,7 +88,7 @@ services:
       - "8090:8090"
 
   traffic-gen:
-    image: ghcr.io/helmedeiros/traffic-gen:v0.0.2
+    image: ghcr.io/helmedeiros/traffic-gen:v0.0.3
     depends_on:
       - decision-gateway
     command:
@@ -100,3 +100,17 @@ services:
       - --target=http://decision-gateway:8090/decide
       - --profile=exp:10->500@5m
       - --preset=default
+      - --otel-enabled
+    environment:
+      # OTel SDK env vars per traffic-gen ADR-0004. traffic-gen is the
+      # trace ROOT of the platform pipeline: each outbound POST gets
+      # a fresh traffic.request span; the gateway extracts the
+      # propagated traceparent and continues the trace; markup-svc
+      # joins as the leaf. The whole traffic-gen -> decision-gateway
+      # -> markup-svc waterfall renders as one trace in Jaeger UI.
+      - OTEL_SERVICE_NAME=traffic-gen
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://host.docker.internal:4317
+      - OTEL_EXPORTER_OTLP_PROTOCOL=grpc
+      - OTEL_TRACES_SAMPLER=parentbased_always_on
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
