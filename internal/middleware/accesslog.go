@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 // RouteRecorder is implemented by the http.ResponseWriter AccessLog
@@ -42,18 +44,32 @@ func AccessLog(out io.Writer, now func() time.Time, next http.Handler) http.Hand
 		start := now()
 		wrapped := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(wrapped, r)
+		attrs := accessAttrs{
+			Method:        r.Method,
+			Path:          r.URL.Path,
+			Status:        wrapped.status,
+			DurationMS:    float64(now().Sub(start)) / float64(time.Millisecond),
+			Route:         wrapped.route,
+			CorrelationID: CorrelationIDFromContext(r.Context()),
+		}
+		// Trace correlation: when the OTel middleware ran ahead of
+		// AccessLog (composition order CorrelationID(Middleware(AccessLog)))
+		// and a span is active in the request context, write its trace
+		// + span IDs onto the access entry so Kibana operators
+		// filtering by attrs.correlation_id can hop to Jaeger via the
+		// trace_id link. When the SpanContext is invalid (--otel-enabled
+		// off, or this endpoint is not wrapped by the OTel middleware),
+		// SpanContextFromContext returns a zero SpanContext whose
+		// IsValid() is false; the fields stay omitted via omitempty.
+		if sc := oteltrace.SpanContextFromContext(r.Context()); sc.IsValid() {
+			attrs.TraceID = sc.TraceID().String()
+			attrs.SpanID = sc.SpanID().String()
+		}
 		entry := accessEntry{
 			Time:  start.UTC().Format(time.RFC3339Nano),
 			Level: "info",
 			Msg:   "gateway.access",
-			Attrs: accessAttrs{
-				Method:        r.Method,
-				Path:          r.URL.Path,
-				Status:        wrapped.status,
-				DurationMS:    float64(now().Sub(start)) / float64(time.Millisecond),
-				Route:         wrapped.route,
-				CorrelationID: CorrelationIDFromContext(r.Context()),
-			},
+			Attrs: attrs,
 		}
 		mu.Lock()
 		_ = json.NewEncoder(out).Encode(entry)
@@ -75,6 +91,8 @@ type accessAttrs struct {
 	DurationMS    float64 `json:"duration_ms"`
 	Route         string  `json:"route,omitempty"`
 	CorrelationID string  `json:"correlation_id,omitempty"`
+	TraceID       string  `json:"trace_id,omitempty"`
+	SpanID        string  `json:"span_id,omitempty"`
 }
 
 // statusRecorder wraps http.ResponseWriter so AccessLog can read

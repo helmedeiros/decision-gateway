@@ -7,6 +7,19 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.0.3] - 2023-03-25
+
+Patch release. Closes the Kibana → Jaeger context-switch tax for operators investigating access-log alerts. The gateway.access JSON event gains two strictly-additive fields — `attrs.trace_id` + `attrs.span_id` — read from the active OTel SpanContext at entry-write time when `--otel-enabled` is set. Kibana rows now carry a direct link to the matching Jaeger trace; the operator workflow becomes Discover → Trace in two clicks instead of three context switches.
+
+### Added
+
+- `internal/middleware/accesslog.go`: `accessAttrs` struct gains `TraceID` + `SpanID` fields with `json:"...,omitempty"` tags. The middleware reads `oteltrace.SpanContextFromContext(r.Context())` at entry-build time and writes the IDs when `IsValid()` is true. v0.0.1 + v0.0.2 schema stays a strict subset (consumers parsing the older shape do not break).
+- ADR-0003 (Accepted): access log carries trace_id + span_id for log/trace correlation. One design question answered: where to read the SpanContext (pick end-of-frame; matches the lazy posture of the other entry-time reads, no extra writer-wrapper state).
+
+### Performance impact
+
+~110 ns per traced request (SpanContextFromContext lookup + IsValid + two String() calls), ~11 ns per un-traced request (lookup + IsValid only). Below the existing access-log encode + write cost (~1 µs per entry). Negligible at any realistic gateway throughput.
+
 ## [0.0.2] - 2023-03-22
 
 Tracing release. The gateway becomes a W3C trace context hop: `--otel-enabled` bootstraps an OTLP gRPC TracerProvider + propagator, emits one `gateway.request` server span per inbound request, opens a `gateway.proxy.upstream` client span per upstream call, and injects the `traceparent` header on the proxied request so the upstream service (markup-svc v0.1.5+) joins the same trace. Operators investigating bottlenecks now see the gateway / engine cost split as two stacked bars in Jaeger UI instead of treating the gateway as a black box. Closes the gap pricing-observability ADR-0002 left for the platform's front door.
