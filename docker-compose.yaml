@@ -23,7 +23,7 @@
 
 services:
   markup-svc:
-    image: ghcr.io/helmedeiros/markup-svc:v0.1.6
+    image: ghcr.io/helmedeiros/markup-svc:v0.1.7
     command:
       - --rules=/etc/markup/rules.csv
       - --listen=:8080
@@ -59,7 +59,7 @@ services:
     # the ports map in a compose.override.yaml.
 
   decision-gateway:
-    image: ghcr.io/helmedeiros/decision-gateway:v0.0.3
+    image: ghcr.io/helmedeiros/decision-gateway:v0.0.4
     depends_on:
       - markup-svc
     command:
@@ -88,7 +88,7 @@ services:
       - "8090:8090"
 
   traffic-gen:
-    image: ghcr.io/helmedeiros/traffic-gen:v0.0.3
+    image: ghcr.io/helmedeiros/traffic-gen:v0.0.4
     depends_on:
       - decision-gateway
     command:
