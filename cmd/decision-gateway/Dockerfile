@@ -1,24 +1,31 @@
-# Dockerfile for the decision-gateway binary. Mirrors the
-# traffic-gen and markup-svc pattern (see traffic-gen/cmd/traffic-gen/Dockerfile
-# + markup-svc/cmd/markup-server/Dockerfile + markup-svc ADR-0013):
-# two-stage golang:1.18 build + distroless static :nonroot runtime
-# so the image runs as user 65532 with no shell, no package manager,
-# and no writable filesystem outside the working directory.
+# Dockerfile for the decision-gateway binary. Mirrors the traffic-gen
+# and markup-svc pattern: two-stage golang:1.18 build + distroless
+# static :nonroot runtime so the image runs as user 65532 with no
+# shell, no package manager, and no writable filesystem outside the
+# working directory. Multi-arch (linux/amd64 + linux/arm64) via
+# buildx --platform. See ADR-0004 in this repo (mirror of markup-svc
+# ADR-0018 + traffic-gen ADR-0005).
 #
 # Build context is the repo root: `docker build -f cmd/decision-gateway/Dockerfile .`
 
-FROM golang:1.18 AS build
+# --platform=$BUILDPLATFORM keeps the build stage on the runner's
+# native architecture (no QEMU emulation during go build) while
+# cross-compiling via GOARCH below.
+FROM --platform=$BUILDPLATFORM golang:1.18 AS build
 WORKDIR /src
 
-# The module has no external dependencies today; this COPY still
-# benefits the build layer cache when a go.sum lands in a future
-# release that adds one. The Dockerfile stays the same shape so
-# future-Helio does not have to remember to update it.
-COPY go.mod ./
+ARG BUILDPLATFORM
+ARG TARGETOS
+ARG TARGETARCH
+
+# Both go.mod and go.sum are copied so the module-download layer
+# cache is keyed on the manifest pair (v0.0.2 added OTel deps and
+# the go.sum file along with them).
+COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
     go build -trimpath -ldflags="-s -w" \
     -o /out/decision-gateway ./cmd/decision-gateway
 

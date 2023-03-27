@@ -22,3 +22,4 @@ NNNN-short-decision-name.md
 | [0001](0001-http-gateway.md) | HTTP gateway for the Pricing Decision Platform | ✅ Accepted |
 | [0002](0002-otel-tracing.md) | Gateway-side OTel tracing + W3C trace context propagation | ✅ Accepted |
 | [0003](0003-access-log-trace-correlation.md) | Access log carries trace_id + span_id for log/trace correlation | ✅ Accepted |
+| [0004](0004-multi-arch-images.md) | Multi-arch (linux/amd64 + linux/arm64) image publish | ✅ Accepted |

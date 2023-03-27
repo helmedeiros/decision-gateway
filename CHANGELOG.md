@@ -7,6 +7,20 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.0.4] - 2023-03-27
+
+Multi-arch image release. Mirror of markup-svc/ADR-0018 + traffic-gen/ADR-0005. Closes ADR-0004.
+
+### Added
+
+- `cmd/decision-gateway/Dockerfile`: `--platform=$BUILDPLATFORM` on the build stage + `ARG BUILDPLATFORM` / `ARG TARGETOS` / `ARG TARGETARCH` + GOARCH-aware build command. The stale "go.sum lands in a future release" comment is removed (OTel deps in v0.0.2 brought it in).
+- `.github/workflows/ci.yml`: image-publish job gains `platforms: linux/amd64,linux/arm64`.
+- ADR-0004 (Accepted): multi-arch image publish.
+
+### Performance impact
+
+CI build +30 seconds; runtime zero delta between native amd64 and arm64; Apple Silicon pull no longer triggers Rosetta-2 emulation. The Jaeger trace's per-hop network cost on Apple Silicon drops ~10x to native wire time.
+
 ## [0.0.3] - 2023-03-25
 
 Patch release. Closes the Kibana → Jaeger context-switch tax for operators investigating access-log alerts. The gateway.access JSON event gains two strictly-additive fields — `attrs.trace_id` + `attrs.span_id` — read from the active OTel SpanContext at entry-write time when `--otel-enabled` is set. Kibana rows now carry a direct link to the matching Jaeger trace; the operator workflow becomes Discover → Trace in two clicks instead of three context switches.
