@@ -7,6 +7,27 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.0.5] - 2023-03-28
+
+Upstream connection pool tuning. The per-route `httputil.ReverseProxy`'s outbound `Transport` is now constructed via `newTunedTransport` which sets `MaxIdleConnsPerHost: 128` (vs stdlib default of 2) and copies `http.DefaultTransport`'s sensible defaults for `TLSHandshakeTimeout` / `ExpectContinueTimeout` / `IdleConnTimeout`. Targets the dominant cost identified by the ADR-0017 trace work: the gateway → markup-svc network hop measured ~591 µs median on native arm64, mostly TCP open + close overhead because the previous transport silently used the stdlib's 2-conn-per-host cap. Closes ADR-0005.
+
+### Added
+
+- `proxy.PoolConfig{ MaxIdleConnsPerHost int; IdleConnTimeout time.Duration }`. Zero values fall back to defaults (128 / 90s) applied inside the new unexported `newTunedTransport` helper.
+- `cmd/decision-gateway` flags `--upstream-max-idle-conns` (default 128) + `--upstream-idle-timeout` (default 90s). Operators with unusual fleet shapes tune; default is chosen for the canonical compose + typical multi-route deployments.
+- ADR-0005 (Accepted): upstream connection pool tuning. Two design questions answered: flag-with-default vs hard-coded (pick flag — operator-tunable for unusual fleet shapes, sensible default for the canonical case), how many stdlib-default Transport fields to copy (copy `TLSHandshakeTimeout` + `ExpectContinueTimeout`; leave dial-level keep-alive alone until a real need appears).
+
+### Changed
+
+- `proxy.New` signature gains a `pool PoolConfig` third parameter (before `transportWrapper`). Test callers updated. The OTel-enabled binary still passes the InstrumentedTransport wrapper after the pool tuning — the wrap order is `InstrumentedTransport → TunedTransport → wire`.
+- `newReverseProxy` delegates Transport construction to `newTunedTransport` instead of building a bare `&http.Transport{ResponseHeaderTimeout: timeout}`. Closes a latent bug where `--backend-timeout` set produced a Transport WORSE than the `http.DefaultTransport` (no TLS handshake timeout, no idle-conn timeout, no expect-continue timeout).
+
+### Performance impact
+
+- **Connection acquisition** drops from ~500-1000 µs (full TCP handshake + slow-start for the >2-conn excess) to ~10-100 ns (atomic pool pop) once the pool is warm. The first ~128 requests after a restart still open fresh conns.
+- **Memory**: ~10 KB per idle conn × 128 × 1 backend = ~1.3 MB. Negligible.
+- **Expected trace shift**: `gateway.proxy.upstream` median should drop from ~600 µs to ~100 µs at the same QPS; `traffic.request` total drops by roughly the same delta.
+
 ## [0.0.4] - 2023-03-27
 
 Multi-arch image release. Mirror of markup-svc/ADR-0018 + traffic-gen/ADR-0005. Closes ADR-0004.

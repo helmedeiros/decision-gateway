@@ -32,7 +32,7 @@ func newRouter(t *testing.T, routes ...gateway.Route) *gateway.Router {
 }
 
 func TestNewRejectsNilRouter(t *testing.T) {
-	if _, err := proxy.New(nil, 0, nil); err == nil {
+	if _, err := proxy.New(nil, 0, proxy.PoolConfig{}, nil); err == nil {
 		t.Fatal("New accepted nil router; want error")
 	}
 }
@@ -49,7 +49,7 @@ func TestServeHTTPForwardsToMatchedBackend(t *testing.T) {
 	t.Cleanup(backend.Close)
 
 	router := newRouter(t, gateway.Route{Prefix: "/decide", Backend: mustURL(t, backend.URL)})
-	h, err := proxy.New(router, 0, nil)
+	h, err := proxy.New(router, 0, proxy.PoolConfig{}, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestServeHTTPPropagatesCorrelationIDToBackend(t *testing.T) {
 	t.Cleanup(backend.Close)
 
 	router := newRouter(t, gateway.Route{Prefix: "/decide", Backend: mustURL(t, backend.URL)})
-	h, _ := proxy.New(router, 0, nil)
+	h, _ := proxy.New(router, 0, proxy.PoolConfig{}, nil)
 
 	// Wire CorrelationID outside the proxy so the context carries
 	// the value before the proxy reads it. This mirrors the
@@ -103,7 +103,7 @@ func TestServeHTTPStampsMatchedRouteOnWriter(t *testing.T) {
 	t.Cleanup(backend.Close)
 
 	router := newRouter(t, gateway.Route{Prefix: "/decide", Backend: mustURL(t, backend.URL)})
-	h, _ := proxy.New(router, 0, nil)
+	h, _ := proxy.New(router, 0, proxy.PoolConfig{}, nil)
 
 	// The recorder type asserts a RouteRecorder for the access log.
 	rec := &routeCapturingRecorder{ResponseWriter: httptest.NewRecorder()}
@@ -122,7 +122,7 @@ func TestServeHTTPReturns404ForUnmatchedPath(t *testing.T) {
 	t.Cleanup(backend.Close)
 
 	router := newRouter(t, gateway.Route{Prefix: "/decide", Backend: mustURL(t, backend.URL)})
-	h, _ := proxy.New(router, 0, nil)
+	h, _ := proxy.New(router, 0, proxy.PoolConfig{}, nil)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/nope", nil))
@@ -152,7 +152,7 @@ func TestServeHTTPDispatchesToLongestPrefix(t *testing.T) {
 		gateway.Route{Prefix: "/decide", Backend: mustURL(t, short.URL)},
 		gateway.Route{Prefix: "/decide/v2", Backend: mustURL(t, long.URL)},
 	)
-	h, _ := proxy.New(router, 0, nil)
+	h, _ := proxy.New(router, 0, proxy.PoolConfig{}, nil)
 
 	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/decide/v2/predict", nil))
 	if which != "long" {

@@ -59,6 +59,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	fs.SetOutput(stderr)
 	listen := fs.String("listen", ":8090", "HTTP listen address")
 	backendTimeout := fs.Duration("backend-timeout", 5*time.Second, "per-request response-header timeout on outbound requests to backends")
+	upstreamMaxIdleConns := fs.Int("upstream-max-idle-conns", 128, "per-backend idle keep-alive pool size (default 128; stdlib default of 2 forces constant TCP open+close at typical platform QPS). See ADR-0005.")
+	upstreamIdleTimeout := fs.Duration("upstream-idle-timeout", 90*time.Second, "how long an idle keep-alive connection stays in the pool before close (90s default matches http.DefaultTransport; keeps the gateway under typical NAT timeouts at ~5min). See ADR-0005.")
 	otelEnabled := fs.Bool("otel-enabled", false, "emit OpenTelemetry spans + propagate W3C trace context to upstreams via OTLP gRPC; reads OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_SERVICE_NAME etc. per the OTel SDK conventions. See ADR-0002.")
 	var routeSpecs routeFlagList
 	fs.Var(&routeSpecs, "route", "repeatable; format: PREFIX=>BACKEND_URL (e.g., /decide=>http://markup-svc:8080). See ADR-0001.")
@@ -93,7 +95,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		}
 	}
 
-	proxyHandler, err := proxy.New(router, *backendTimeout, transportWrapper)
+	pool := proxy.PoolConfig{
+		MaxIdleConnsPerHost: *upstreamMaxIdleConns,
+		IdleConnTimeout:     *upstreamIdleTimeout,
+	}
+	proxyHandler, err := proxy.New(router, *backendTimeout, pool, transportWrapper)
 	if err != nil {
 		return fmt.Errorf("build proxy: %w", err)
 	}
