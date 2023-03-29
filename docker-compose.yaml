@@ -23,11 +23,12 @@
 
 services:
   markup-svc:
-    image: ghcr.io/helmedeiros/markup-svc:v0.1.7
+    image: ghcr.io/helmedeiros/markup-svc:v0.1.8
     command:
       - --rules=/etc/markup/rules.csv
       - --listen=:8080
       - --otel-enabled
+      - --metrics-enabled
     environment:
       # OTel SDK env vars per markup-svc ADR-0009 + ADR-0016. v0.1.5
       # bootstraps an OTLP gRPC exporter + batched TracerProvider in
@@ -66,6 +67,10 @@ services:
       - --listen=:8090
       - --route=/decide=>http://markup-svc:8080
       - --route=/admin=>http://markup-svc:8080
+      # /metrics forwards to markup-svc so pricing-observability's
+      # Prometheus container can scrape via host.docker.internal:8090.
+      # See pricing-observability ADR-0003.
+      - --route=/metrics=>http://markup-svc:8080
       - --backend-timeout=5s
       - --otel-enabled
     environment:
