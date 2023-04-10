@@ -1,11 +1,16 @@
 package proxy
 
 import (
+	"context"
+	"crypto/tls"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"time"
+
+	"golang.org/x/net/http2"
 
 	"github.com/helmedeiros/decision-gateway/internal/gateway"
 	"github.com/helmedeiros/decision-gateway/internal/middleware"
@@ -21,6 +26,15 @@ type Handler struct {
 	proxies  map[string]*httputil.ReverseProxy
 	notFound http.Handler
 }
+
+// UpstreamProtocol picks the wire protocol the proxy uses for outbound
+// calls to backends. See ADR-0006.
+type UpstreamProtocol int
+
+const (
+	UpstreamHTTP1 UpstreamProtocol = iota
+	UpstreamH2C                    // HTTP/2 over plaintext (prior knowledge)
+)
 
 // PoolConfig tunes the per-route HTTP transport's connection pool.
 // Zero values fall back to Go's stdlib defaults — which include
@@ -62,13 +76,13 @@ type PoolConfig struct {
 // upstream call carries a traceparent header and emits a
 // gateway.proxy.upstream child span (see ADR-0002). When nil, the
 // proxies use the tuned Transport unchanged.
-func New(router *gateway.Router, backendTimeout time.Duration, pool PoolConfig, transportWrapper func(http.RoundTripper) http.RoundTripper) (*Handler, error) {
+func New(router *gateway.Router, backendTimeout time.Duration, pool PoolConfig, protocol UpstreamProtocol, transportWrapper func(http.RoundTripper) http.RoundTripper) (*Handler, error) {
 	if router == nil {
 		return nil, fmt.Errorf("router is required")
 	}
 	proxies := make(map[string]*httputil.ReverseProxy, len(router.Routes()))
 	for _, route := range router.Routes() {
-		rp := newReverseProxy(route.Backend, backendTimeout, pool, transportWrapper)
+		rp := newReverseProxy(route.Backend, backendTimeout, pool, protocol, transportWrapper)
 		proxies[route.Prefix] = rp
 	}
 	return &Handler{
@@ -110,7 +124,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // requested. The Transport is configured with the per-host idle
 // pool sized via pool.MaxIdleConnsPerHost so steady-state QPS does
 // not force constant TCP open + close per request. See ADR-0005.
-func newReverseProxy(backend *url.URL, timeout time.Duration, pool PoolConfig, transportWrapper func(http.RoundTripper) http.RoundTripper) *httputil.ReverseProxy {
+func newReverseProxy(backend *url.URL, timeout time.Duration, pool PoolConfig, protocol UpstreamProtocol, transportWrapper func(http.RoundTripper) http.RoundTripper) *httputil.ReverseProxy {
 	rp := httputil.NewSingleHostReverseProxy(backend)
 	// httputil.NewSingleHostReverseProxy's default Director rewrites
 	// scheme, host, and URL.Path; we keep the path-rewrite default
@@ -122,7 +136,7 @@ func newReverseProxy(backend *url.URL, timeout time.Duration, pool PoolConfig, t
 	// http://markup-svc:8080 as the backend. Documented here so a
 	// future refactor that adds a backend Path does not accidentally
 	// prepend it.
-	rp.Transport = newTunedTransport(timeout, pool, transportWrapper)
+	rp.Transport = newTunedTransport(timeout, pool, protocol, transportWrapper)
 	return rp
 }
 
@@ -141,7 +155,21 @@ func newReverseProxy(backend *url.URL, timeout time.Duration, pool PoolConfig, t
 //
 // Other fields take stdlib defaults (DisableKeepAlives=false,
 // TLSHandshakeTimeout=10s, ExpectContinueTimeout=1s).
-func newTunedTransport(timeout time.Duration, pool PoolConfig, transportWrapper func(http.RoundTripper) http.RoundTripper) http.RoundTripper {
+func newTunedTransport(timeout time.Duration, pool PoolConfig, protocol UpstreamProtocol, transportWrapper func(http.RoundTripper) http.RoundTripper) http.RoundTripper {
+	var base http.RoundTripper
+	switch protocol {
+	case UpstreamH2C:
+		base = newH2CTransport()
+	default:
+		base = newHTTP1Transport(timeout, pool)
+	}
+	if transportWrapper != nil {
+		base = transportWrapper(base)
+	}
+	return base
+}
+
+func newHTTP1Transport(timeout time.Duration, pool PoolConfig) http.RoundTripper {
 	maxIdlePerHost := pool.MaxIdleConnsPerHost
 	if maxIdlePerHost <= 0 {
 		maxIdlePerHost = 128
@@ -150,20 +178,29 @@ func newTunedTransport(timeout time.Duration, pool PoolConfig, transportWrapper 
 	if idleTimeout <= 0 {
 		idleTimeout = 90 * time.Second
 	}
-	t := &http.Transport{
-		MaxIdleConns:          0, // unlimited total; the per-host cap is the real lever
+	return &http.Transport{
 		MaxIdleConnsPerHost:   maxIdlePerHost,
-		MaxConnsPerHost:       0, // unlimited active; we are not a rate limiter
 		IdleConnTimeout:       idleTimeout,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 		ResponseHeaderTimeout: timeout,
 	}
-	var base http.RoundTripper = t
-	if transportWrapper != nil {
-		base = transportWrapper(base)
+}
+
+// newH2CTransport returns an http2.Transport that speaks HTTP/2 over
+// cleartext (prior knowledge) — required when the upstream serves
+// h2c (markup-svc v0.1.11+). HTTP/2 multiplexes many in-flight
+// requests over one TCP connection so the connection-pool sizing
+// from the HTTP/1.1 path becomes moot: one or two long-lived
+// connections per backend handle the full QPS.
+func newH2CTransport() http.RoundTripper {
+	return &http2.Transport{
+		AllowHTTP: true,
+		DialTLSContext: func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, network, addr)
+		},
 	}
-	return base
 }
 
 // notFound is the handler invoked when Router.Match returns false.

@@ -7,6 +7,26 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.0.6] - 2023-04-10
+
+h2c upstream transport. `--upstream-h2c` (default false) switches the per-route reverse-proxy `Transport` from the tuned `http.Transport` to `http2.Transport{AllowHTTP: true}`. When on, one TCP connection per backend carries N concurrent requests via HTTP/2 multiplexing. Closes ADR-0006.
+
+### Added
+
+- `proxy.UpstreamProtocol` enum (`UpstreamHTTP1` / `UpstreamH2C`). `proxy.New` takes it as a parameter.
+- `newH2CTransport` (h2c via prior knowledge) selected when the operator passes `--upstream-h2c`.
+- `cmd` flag `--upstream-h2c`.
+- `golang.org/x/net@v0.8.0` direct import.
+- ADR-0006.
+
+### Changed
+
+- `proxy.New` signature: `func New(router, backendTimeout, pool, protocol, transportWrapper)`.
+
+### Performance
+
+Expected gateway → markup-svc hop median drops from ~310 µs (HTTP/1.1 with pool tuning) to ~50–100 µs (HTTP/2 multiplexed) at sustained QPS once the platform runs the v0.0.6 + markup-svc v0.1.11 pair. Validation lands with the compose bump.
+
 ## [0.0.5] - 2023-03-28
 
 Upstream connection pool tuning. The per-route `httputil.ReverseProxy`'s outbound `Transport` is now constructed via `newTunedTransport` which sets `MaxIdleConnsPerHost: 128` (vs stdlib default of 2) and copies `http.DefaultTransport`'s sensible defaults for `TLSHandshakeTimeout` / `ExpectContinueTimeout` / `IdleConnTimeout`. Targets the dominant cost identified by the ADR-0017 trace work: the gateway → markup-svc network hop measured ~591 µs median on native arm64, mostly TCP open + close overhead because the previous transport silently used the stdlib's 2-conn-per-host cap. Closes ADR-0005.
