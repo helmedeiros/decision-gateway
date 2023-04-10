@@ -23,7 +23,7 @@
 
 services:
   markup-svc:
-    image: ghcr.io/helmedeiros/markup-svc:v0.1.9
+    image: ghcr.io/helmedeiros/markup-svc:v0.1.12
     command:
       - --rules=/etc/markup/rules.csv
       - --listen=:8080
@@ -60,7 +60,7 @@ services:
     # the ports map in a compose.override.yaml.
 
   decision-gateway:
-    image: ghcr.io/helmedeiros/decision-gateway:v0.0.5
+    image: ghcr.io/helmedeiros/decision-gateway:v0.0.6
     depends_on:
       - markup-svc
     command:
@@ -73,6 +73,7 @@ services:
       - --route=/metrics=>http://markup-svc:8080
       - --backend-timeout=5s
       - --otel-enabled
+      - --upstream-h2c
     environment:
       # OTel SDK env vars per decision-gateway ADR-0002. The gateway
       # becomes a trace-context hop: it extracts incoming W3C
