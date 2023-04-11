@@ -73,7 +73,11 @@ services:
       - --route=/metrics=>http://markup-svc:8080
       - --backend-timeout=5s
       - --otel-enabled
-      - --upstream-h2c
+      # --upstream-h2c tested and rolled back: measured p95 nearly
+      # tripled (1.10ms → 3.02ms) due to single-connection HOL
+      # blocking. Pool-tuned HTTP/1.1 wins for sub-ms requests on
+      # LAN-class RTT. Flag stays available for cross-region /
+      # high-RTT workloads. See decision-gateway/ADR-0006.
     environment:
       # OTel SDK env vars per decision-gateway ADR-0002. The gateway
       # becomes a trace-context hop: it extracts incoming W3C
