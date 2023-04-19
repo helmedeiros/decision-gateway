@@ -25,3 +25,4 @@ NNNN-short-decision-name.md
 | [0004](0004-multi-arch-images.md) | Multi-arch (linux/amd64 + linux/arm64) image publish | ✅ Accepted |
 | [0005](0005-upstream-connection-pool-tuning.md) | Upstream connection pool tuning | ✅ Accepted |
 | [0006](0006-h2c-upstream.md) | h2c (HTTP/2 cleartext) upstream transport | ✅ Accepted |
+| [0007](0007-prometheus-metrics-endpoint.md) | Prometheus /metrics endpoint on the gateway | ✅ Accepted |

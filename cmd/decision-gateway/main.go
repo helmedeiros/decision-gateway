@@ -19,6 +19,7 @@ import (
 	"github.com/helmedeiros/decision-gateway/internal/gateway"
 	"github.com/helmedeiros/decision-gateway/internal/httpapi"
 	"github.com/helmedeiros/decision-gateway/internal/middleware"
+	gwmetrics "github.com/helmedeiros/decision-gateway/internal/observability/metrics"
 	gwotel "github.com/helmedeiros/decision-gateway/internal/observability/otel"
 	"github.com/helmedeiros/decision-gateway/internal/proxy"
 	"go.opentelemetry.io/otel/trace"
@@ -62,6 +63,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	upstreamMaxIdleConns := fs.Int("upstream-max-idle-conns", 128, "per-backend idle keep-alive pool size (default 128; stdlib default of 2 forces constant TCP open+close at typical platform QPS). See ADR-0005.")
 	upstreamIdleTimeout := fs.Duration("upstream-idle-timeout", 90*time.Second, "how long an idle keep-alive connection stays in the pool before close (90s default matches http.DefaultTransport; keeps the gateway under typical NAT timeouts at ~5min). See ADR-0005.")
 	upstreamH2C := fs.Bool("upstream-h2c", false, "speak HTTP/2 over cleartext to upstreams (markup-svc v0.1.11+). Multiplexes many in-flight requests over one TCP connection; pool-sizing flags above become moot when on. See ADR-0006.")
+	metricsEnabled := fs.Bool("metrics-enabled", false, "expose Prometheus /metrics with gateway_requests_total counter + gateway_request_duration_seconds histogram labeled by method / route / status. See ADR-0007.")
 	otelEnabled := fs.Bool("otel-enabled", false, "emit OpenTelemetry spans + propagate W3C trace context to upstreams via OTLP gRPC; reads OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_SERVICE_NAME etc. per the OTel SDK conventions. See ADR-0002.")
 	var routeSpecs routeFlagList
 	fs.Var(&routeSpecs, "route", "repeatable; format: PREFIX=>BACKEND_URL (e.g., /decide=>http://markup-svc:8080). See ADR-0001.")
@@ -109,23 +111,30 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return fmt.Errorf("build proxy: %w", err)
 	}
 
+	var metricsSink *gwmetrics.Sink
+	var metricsHandler http.Handler
+	if *metricsEnabled {
+		metricsSink, metricsHandler = gwmetrics.New()
+	}
+
 	mux := http.NewServeMux()
 	mux.Handle("/healthz", httpapi.Healthz())
 	mux.Handle("/readyz", httpapi.Readyz(isReady))
-	// Anything else: hand to the proxy (which itself returns 404 on
-	// unmatched routes). Mounting "/" as the fallback means /healthz
-	// and /readyz win their exact-path matches first.
+	if metricsHandler != nil {
+		mux.Handle("/metrics", metricsHandler)
+	}
 	mux.Handle("/", proxyHandler)
 
-	// Composition order: CorrelationID OUTSIDE Tracing OUTSIDE AccessLog.
-	// CorrelationID first so the correlation ID is in the request
-	// context when the span starts. Tracing inside CorrelationID so
-	// the span sits in that frame, and outside AccessLog so the span
-	// covers AccessLog's window (the gateway.duration_ms span
-	// attribute matches the access event's duration_ms by
-	// construction). When --otel-enabled is not set the Tracing
-	// frame is skipped entirely so the path stays zero-overhead.
+	// Composition order: CorrelationID outermost so the ID is in
+	// context for every inner frame; Tracing (when on) opens the
+	// span next so it sees the correlation ID; Metrics (when on)
+	// wraps AccessLog so its method/route/status read the same
+	// values AccessLog writes; AccessLog innermost so the span
+	// covers its window.
 	var inner http.Handler = middleware.AccessLog(stdout, nil, mux)
+	if metricsSink != nil {
+		inner = metricsSink.Middleware(inner)
+	}
 	if tracer != nil {
 		inner = gwotel.Middleware(tracer, inner)
 	}

@@ -7,6 +7,17 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.0.7] - 2023-04-19
+
+Gateway-side Prometheus `/metrics` endpoint. Always-on signal complementing the OTel spanmetrics view (which requires `--otel-enabled` + the Collector). Closes ADR-0007.
+
+### Added
+
+- `internal/observability/metrics`: new package. `Sink` + `New() (*Sink, http.Handler)` constructs a private registry holding `gateway_requests_total` (counter, labels `method`/`route`/`status`) + `gateway_request_duration_seconds` (histogram, 14 sub-millisecond buckets, same labels). `Sink.Middleware` wraps the response writer, captures status + matched route via the existing `middleware.RouteRecorder` writer-stamp pattern.
+- `cmd` flag `--metrics-enabled` (default off). When set, the gateway mounts `/metrics` and inserts the middleware inside the OTel tracing frame, outside AccessLog so labels and access events stay in sync.
+- `github.com/prometheus/client_golang@v1.14.0` dep.
+- ADR-0007.
+
 ## [0.0.6] - 2023-04-10
 
 h2c upstream transport. `--upstream-h2c` (default false) switches the per-route reverse-proxy `Transport` from the tuned `http.Transport` to `http2.Transport{AllowHTTP: true}`. When on, one TCP connection per backend carries N concurrent requests via HTTP/2 multiplexing. Closes ADR-0006.
