@@ -48,36 +48,25 @@ services:
       - OTEL_EXPORTER_OTLP_PROTOCOL=grpc
       - OTEL_TRACES_SAMPLER=parentbased_always_on
     extra_hosts:
-      # host.docker.internal is Docker Desktop's host alias. On Linux
-      # docker, the host-gateway IP works the same way once compose
-      # adds the extra_hosts mapping.
       - "host.docker.internal:host-gateway"
     volumes:
       - ./compose-fixtures/rules.csv:/etc/markup/rules.csv:ro
-    # No host port exposure: traffic flows through the gateway. An
-    # operator wanting direct access (e.g., to inspect markup-svc's
-    # /admin endpoints without the gateway in the way) overrides
-    # the ports map in a compose.override.yaml.
+    ports:
+      # Expose 8080 to the host so Prometheus scrapes /metrics
+      # directly (the gateway now owns /metrics on 8090 per ADR-0007).
+      - "8080:8080"
 
   decision-gateway:
-    image: ghcr.io/helmedeiros/decision-gateway:v0.0.6
+    image: ghcr.io/helmedeiros/decision-gateway:v0.0.7
     depends_on:
       - markup-svc
     command:
       - --listen=:8090
       - --route=/decide=>http://markup-svc:8080
       - --route=/admin=>http://markup-svc:8080
-      # /metrics forwards to markup-svc so pricing-observability's
-      # Prometheus container can scrape via host.docker.internal:8090.
-      # See pricing-observability ADR-0003.
-      - --route=/metrics=>http://markup-svc:8080
       - --backend-timeout=5s
       - --otel-enabled
-      # --upstream-h2c tested and rolled back: measured p95 nearly
-      # tripled (1.10ms → 3.02ms) due to single-connection HOL
-      # blocking. Pool-tuned HTTP/1.1 wins for sub-ms requests on
-      # LAN-class RTT. Flag stays available for cross-region /
-      # high-RTT workloads. See decision-gateway/ADR-0006.
+      - --metrics-enabled
     environment:
       # OTel SDK env vars per decision-gateway ADR-0002. The gateway
       # becomes a trace-context hop: it extracts incoming W3C
@@ -98,19 +87,17 @@ services:
       - "8090:8090"
 
   traffic-gen:
-    image: ghcr.io/helmedeiros/traffic-gen:v0.0.4
+    image: ghcr.io/helmedeiros/traffic-gen:v0.0.5
     depends_on:
       - decision-gateway
     command:
-      # Default to a 5-minute exponential ramp from 10 to 500 QPS,
-      # then hold 500 QPS until the operator stops the stack.
-      # Operators wanting a different shape override `command` in a
-      # compose.override.yaml or pass extra args to
-      # `docker compose run traffic-gen`.
       - --target=http://decision-gateway:8090/decide
       - --profile=exp:10->500@5m
       - --preset=default
       - --otel-enabled
+      - --metrics-listen=:9101
+    ports:
+      - "9101:9101"
     environment:
       # OTel SDK env vars per traffic-gen ADR-0004. traffic-gen is the
       # trace ROOT of the platform pipeline: each outbound POST gets
