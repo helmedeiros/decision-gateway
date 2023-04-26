@@ -26,3 +26,4 @@ NNNN-short-decision-name.md
 | [0005](0005-upstream-connection-pool-tuning.md) | Upstream connection pool tuning | ✅ Accepted |
 | [0006](0006-h2c-upstream.md) | h2c (HTTP/2 cleartext) upstream transport | ✅ Accepted |
 | [0007](0007-prometheus-metrics-endpoint.md) | Prometheus /metrics endpoint on the gateway | ✅ Accepted |
+| [0008](0008-routes-hot-reload.md) | Hot reload of the route table via POST /admin/routes | ✅ Accepted |

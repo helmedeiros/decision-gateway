@@ -64,6 +64,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	upstreamIdleTimeout := fs.Duration("upstream-idle-timeout", 90*time.Second, "how long an idle keep-alive connection stays in the pool before close (90s default matches http.DefaultTransport; keeps the gateway under typical NAT timeouts at ~5min). See ADR-0005.")
 	upstreamH2C := fs.Bool("upstream-h2c", false, "speak HTTP/2 over cleartext to upstreams (markup-svc v0.1.11+). Multiplexes many in-flight requests over one TCP connection; pool-sizing flags above become moot when on. See ADR-0006.")
 	metricsEnabled := fs.Bool("metrics-enabled", false, "expose Prometheus /metrics with gateway_requests_total counter + gateway_request_duration_seconds histogram labeled by method / route / status. See ADR-0007.")
+	routesAdmin := fs.Bool("routes-admin", false, "mount POST/GET /admin/routes for hot-replacing the active route table without restart (see ADR-0008). Requires a proxy.Holder wired into the request path -- adds ~30 ns RLock per request.")
 	otelEnabled := fs.Bool("otel-enabled", false, "emit OpenTelemetry spans + propagate W3C trace context to upstreams via OTLP gRPC; reads OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_SERVICE_NAME etc. per the OTel SDK conventions. See ADR-0002.")
 	var routeSpecs routeFlagList
 	fs.Var(&routeSpecs, "route", "repeatable; format: PREFIX=>BACKEND_URL (e.g., /decide=>http://markup-svc:8080). See ADR-0001.")
@@ -106,9 +107,28 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if *upstreamH2C {
 		protocol = proxy.UpstreamH2C
 	}
-	proxyHandler, err := proxy.New(router, *backendTimeout, pool, protocol, transportWrapper)
-	if err != nil {
-		return fmt.Errorf("build proxy: %w", err)
+	buildCfg := proxy.BuildConfig{
+		BackendTimeout:   *backendTimeout,
+		Pool:             pool,
+		Protocol:         protocol,
+		TransportWrapper: transportWrapper,
+	}
+
+	var proxyHandler http.Handler
+	var routesHolder *proxy.Holder
+	if *routesAdmin {
+		h, err := proxy.NewHolder(router, buildCfg)
+		if err != nil {
+			return fmt.Errorf("build proxy holder: %w", err)
+		}
+		routesHolder = h
+		proxyHandler = h
+	} else {
+		h, err := proxy.New(router, buildCfg.BackendTimeout, buildCfg.Pool, buildCfg.Protocol, buildCfg.TransportWrapper)
+		if err != nil {
+			return fmt.Errorf("build proxy: %w", err)
+		}
+		proxyHandler = h
 	}
 
 	var metricsSink *gwmetrics.Sink
@@ -122,6 +142,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	mux.Handle("/readyz", httpapi.Readyz(isReady))
 	if metricsHandler != nil {
 		mux.Handle("/metrics", metricsHandler)
+	}
+	if routesHolder != nil {
+		mux.Handle("/admin/routes", httpapi.RoutesAdmin(routesHolder, stderr))
 	}
 	mux.Handle("/", proxyHandler)
 

@@ -7,6 +7,21 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.0.8] - 2023-04-26
+
+Hot reload of the route table via `POST /admin/routes`. Operators reconfigure routes without restart — atomic swap, idempotent (replace-whole-table), validates before swapping. Closes ADR-0008.
+
+### Added
+
+- `internal/proxy.Holder` — wraps `*Handler` behind `sync.RWMutex` (same shape as markup-svc/ADR-0015's swap.Decider). `BuildConfig` captures the per-route options so every rebuilt `*Handler` keeps the same transport configuration.
+- `internal/httpapi.RoutesAdmin(holder, errLog)` — `GET /admin/routes` returns the current table; `POST /admin/routes {"routes":[{"prefix":"...","backend":"..."}]}` validates + swaps. Validation failures return 400 and leave the old table serving.
+- `cmd` flag `--routes-admin` (default off for backwards compatibility).
+- ADR-0008.
+
+### Performance impact
+
+`--routes-admin` not set: zero ns delta vs v0.0.7 (the legacy `*proxy.Handler` is used directly). `--routes-admin` set: ~30 ns RLock pair per request inside `Holder.ServeHTTP`. Replace is ~50 µs operator-triggered, not on the hot path.
+
 ## [0.0.7] - 2023-04-19
 
 Gateway-side Prometheus `/metrics` endpoint. Always-on signal complementing the OTel spanmetrics view (which requires `--otel-enabled` + the Collector). Closes ADR-0007.
