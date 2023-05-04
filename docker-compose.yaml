@@ -23,7 +23,7 @@
 
 services:
   markup-svc:
-    image: ghcr.io/helmedeiros/markup-svc:v0.1.14
+    image: ghcr.io/helmedeiros/markup-svc:v0.1.16
     command:
       - --rules=/etc/markup/rules.csv
       - --listen=:8080
