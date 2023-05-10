@@ -108,9 +108,11 @@ type statusRecorder struct {
 	route       string
 }
 
-// SetMatchedRoute implements RouteRecorder.
 func (s *statusRecorder) SetMatchedRoute(prefix string) {
 	s.route = prefix
+	if rec, ok := s.ResponseWriter.(RouteRecorder); ok {
+		rec.SetMatchedRoute(prefix)
+	}
 }
 
 func (s *statusRecorder) WriteHeader(status int) {

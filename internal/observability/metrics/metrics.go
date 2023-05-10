@@ -93,8 +93,15 @@ func (sw *statusWriter) Write(b []byte) (int, error) {
 	return sw.ResponseWriter.Write(b)
 }
 
-// SetMatchedRoute implements middleware.RouteRecorder so the proxy's
-// existing writer-stamping path lights up this label too.
-func (sw *statusWriter) SetMatchedRoute(route string) { sw.route = route }
+// SetMatchedRoute implements middleware.RouteRecorder. Chains the
+// call down to the underlying writer if it also implements
+// RouteRecorder so middleware wrappers further out (or further in)
+// still see the stamp. See ADR-0009.
+func (sw *statusWriter) SetMatchedRoute(route string) {
+	sw.route = route
+	if rec, ok := sw.ResponseWriter.(middleware.RouteRecorder); ok {
+		rec.SetMatchedRoute(route)
+	}
+}
 
 var _ middleware.RouteRecorder = (*statusWriter)(nil)

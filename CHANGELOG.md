@@ -7,6 +7,15 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.0.9] - 2023-05-10
+
+`gateway_requests_total` now populates the `route` label correctly. Closes ADR-0009.
+
+### Fixed
+
+- `statusRecorder.SetMatchedRoute` (AccessLog) and `statusWriter.SetMatchedRoute` (metrics) chain the call to the underlying writer if it also implements `RouteRecorder`. With Metrics wrapping AccessLog, the proxy stamps the route on AccessLog's wrapper; chaining propagates the stamp to the metrics writer underneath. Previously the metrics counter held `route=""` for every request.
+- Regression test in `internal/middleware/route_chain_test.go` proves an outer recorder observes the route after AccessLog handles the stamp.
+
 ## [0.0.8] - 2023-04-26
 
 Hot reload of the route table via `POST /admin/routes`. Operators reconfigure routes without restart — atomic swap, idempotent (replace-whole-table), validates before swapping. Closes ADR-0008.
