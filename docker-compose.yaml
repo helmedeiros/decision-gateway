@@ -57,7 +57,7 @@ services:
       - "8080:8080"
 
   decision-gateway:
-    image: ghcr.io/helmedeiros/decision-gateway:v0.0.7
+    image: ghcr.io/helmedeiros/decision-gateway:v0.0.9
     depends_on:
       - markup-svc
     command:
