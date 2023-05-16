@@ -87,7 +87,7 @@ services:
       - "8090:8090"
 
   traffic-gen:
-    image: ghcr.io/helmedeiros/traffic-gen:v0.0.5
+    image: ghcr.io/helmedeiros/traffic-gen:v0.0.7
     depends_on:
       - decision-gateway
     command:
@@ -96,6 +96,8 @@ services:
       - --preset=default
       - --otel-enabled
       - --metrics-listen=:9101
+      - --admin-target=http://decision-gateway:8090/admin/reload
+      - --admin-interval=30s
     ports:
       - "9101:9101"
     environment:
