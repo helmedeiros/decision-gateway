@@ -87,7 +87,7 @@ services:
       - "8090:8090"
 
   traffic-gen:
-    image: ghcr.io/helmedeiros/traffic-gen:v0.0.7
+    image: ghcr.io/helmedeiros/traffic-gen:v0.0.8
     depends_on:
       - decision-gateway
     command:
