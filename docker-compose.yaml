@@ -86,6 +86,56 @@ services:
     ports:
       - "8090:8090"
 
+  # model-registry: the v0.0.4 control plane (ADR-0005). Operators
+  # drive `mrctl upload && mrctl promote` against this service to push
+  # a new rule set; the registry then rolling-pushes the bytes to
+  # markup-svc's body-based /admin/reload contract. We pin to :main
+  # because v0.0.4 was tagged before the GHCR image job landed; the
+  # next tagged release surfaces :vX.Y.Z for pinning. Fallback for
+  # offline operators: build locally
+  # (`docker build -f cmd/model-registry/Dockerfile -t model-registry:local .`
+  # in the model-registry repo) and swap the image line below.
+  model-registry:
+    image: ghcr.io/helmedeiros/model-registry:main
+    depends_on:
+      - markup-svc
+    command:
+      - --addr=:8090
+      - --store-backend=fs
+      - --store-root=/data
+      - --instances-config=/etc/registry/instances.json
+      - --log-level=info
+    environment:
+      # OTel SDK env vars: the registry is a trace HOP. mrctl (or any
+      # operator client) opens the root span; the registry extracts
+      # the propagated traceparent in WithServerSpan, opens per-
+      # handler child spans (registry.champion.commit_state,
+      # registry.audit.record, registry.deploy.push_to_instance,
+      # registry.deploy.readyz per ADR-0019), and injects the
+      # traceparent on the outbound /admin/reload + /readyz calls so
+      # markup-svc nests as a downstream service in the same trace.
+      - OTEL_SERVICE_NAME=model-registry
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://host.docker.internal:4317
+      - OTEL_EXPORTER_OTLP_PROTOCOL=grpc
+      - OTEL_TRACES_SAMPLER=parentbased_always_on
+      # The cmd shell reads these as flag overrides via envOr; same
+      # config surface mrctl sees.
+      - REGISTRY_OTEL_EXPORTER=otlp
+      - REGISTRY_OTEL_ENDPOINT=host.docker.internal:4317
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # Named volume so the fsstore + fsstate + fsaudit SQLite files
+      # survive a compose restart; operators iterate on the rule set
+      # without losing audit history.
+      - registry-data:/data
+      - ./compose-fixtures/instances.json:/etc/registry/instances.json:ro
+    ports:
+      # Host 8091 to match the prometheus.yml scrape config in
+      # pricing-observability (ADR-0019 §scrape-config); inside the
+      # compose network the registry stays on 8090.
+      - "8091:8090"
+
   traffic-gen:
     image: ghcr.io/helmedeiros/traffic-gen:v0.0.8
     depends_on:
@@ -113,3 +163,6 @@ services:
       - OTEL_TRACES_SAMPLER=parentbased_always_on
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
+volumes:
+  registry-data:

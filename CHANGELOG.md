@@ -7,6 +7,11 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- `docker-compose.yaml` gains a `model-registry` service alongside markup-svc, decision-gateway, and traffic-gen. Image `ghcr.io/helmedeiros/model-registry:main` (pinned to main because v0.0.4 was tagged before the GHCR image job landed; next tag publishes `:vX.Y.Z` for pinning). Mounts a named `registry-data` volume at `/data` so the fsstore + fsstate + fsaudit SQLite files survive compose restarts; mounts `compose-fixtures/instances.json` so `mrctl promote --env production` routes to the in-stack `markup-svc`. Publishes host port 8091 to match the `pricing-observability` Prometheus scrape config (ADR-0019). OTel SDK env vars wire the registry as a trace HOP: mrctl opens the root span, the registry extracts traceparent and emits per-handler child spans (`registry.champion.commit_state`, `registry.audit.record`, `registry.deploy.push_to_instance`, `registry.deploy.readyz`), traceparent is injected on the outbound `/admin/reload` so markup-svc nests as a downstream service in the same trace.
+- `compose-fixtures/instances.json` mapping `production → http://markup-svc:8080` so `mrctl promote --env production` succeeds out of the box against the compose stack.
+
 ## [0.0.9] - 2023-05-10
 
 `gateway_requests_total` now populates the `route` label correctly. Closes ADR-0009.
