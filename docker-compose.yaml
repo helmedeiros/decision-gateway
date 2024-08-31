@@ -23,12 +23,14 @@
 
 services:
   markup-svc:
-    image: ghcr.io/helmedeiros/markup-svc:v0.1.21
+    image: ghcr.io/helmedeiros/markup-svc:main
     command:
       - --rules=/etc/markup/rules.csv
       - --listen=:8080
       - --otel-enabled
       - --metrics-enabled
+      - --shadow-admin
+      - --shadow-sample-rate=1.0
     environment:
       # OTel SDK env vars per markup-svc ADR-0009 + ADR-0016. v0.1.5
       # bootstraps an OTLP gRPC exporter + batched TracerProvider in
