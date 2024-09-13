@@ -5,17 +5,22 @@ PKG       := ./...
 COVER_OUT ?= coverage.out
 COVER_MIN ?= 80
 
-.PHONY: help lint vet test cover check-adrs all ci-local clean
+.PHONY: help lint vet test cover check-adrs all ci-local clean scientific-platform
 
 help:
 	@echo "Targets:"
-	@echo "  lint        - run go vet (golangci-lint when installed)"
-	@echo "  vet         - run go vet"
-	@echo "  test        - run go test with the race detector"
-	@echo "  cover       - run tests with coverage and enforce \$$COVER_MIN ($(COVER_MIN)%)"
-	@echo "  check-adrs  - verify the ADR README index matches the folder"
-	@echo "  ci-local    - the same checks CI runs, in the same order"
-	@echo "  clean       - remove generated coverage artifacts"
+	@echo "  lint                - run go vet (golangci-lint when installed)"
+	@echo "  vet                 - run go vet"
+	@echo "  test                - run go test with the race detector"
+	@echo "  cover               - run tests with coverage and enforce \$$COVER_MIN ($(COVER_MIN)%)"
+	@echo "  check-adrs          - verify the ADR README index matches the folder"
+	@echo "  ci-local            - the same checks CI runs, in the same order"
+	@echo "  scientific-platform - drive multi-rate load against the live compose stack"
+	@echo "                        and assert the scientific/platform-v0.1.0/ bars"
+	@echo "  clean               - remove generated coverage artifacts"
+
+scientific-platform:
+	@./scripts/scientific-platform.sh
 
 # Each gate vacuously passes when the module has no Go files yet.
 HAS_GO := $(shell find . -name '*.go' -not -path './.git/*' -print -quit)

@@ -154,7 +154,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	// wraps AccessLog so its method/route/status read the same
 	// values AccessLog writes; AccessLog innermost so the span
 	// covers its window.
-	var inner http.Handler = middleware.AccessLog(stdout, nil, mux)
+	var inner = middleware.AccessLog(stdout, nil, mux)
 	if metricsSink != nil {
 		inner = metricsSink.Middleware(inner)
 	}
