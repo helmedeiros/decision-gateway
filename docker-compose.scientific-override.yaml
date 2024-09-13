@@ -1,0 +1,4 @@
+services:
+  markup-svc:
+    ports: !override
+      - "18080:8080"
