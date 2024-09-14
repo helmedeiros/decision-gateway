@@ -103,10 +103,17 @@ delta() {
   query "sum(increase(${metric}[${window}]))"
 }
 
-# p99 from a histogram, over a window.
+# p99 from a histogram over an anchored window, converted to ms.
+# The `_seconds` histograms are scaled × 1000; the `_milliseconds`
+# histograms are already in ms.
 p99_ms() {
-  local hist="$1" filter="$2" window="$3"
-  query "histogram_quantile(0.99, sum by (le) (rate(${hist}_bucket{${filter}}[${window}]))) * 1000"
+  local hist="$1" filter="$2" window="$3" anchor_ts="$4"
+  local scale=1000
+  case "$hist" in
+    *_milliseconds) scale=1 ;;
+    *_seconds)      scale=1000 ;;
+  esac
+  query "histogram_quantile(0.99, sum by (le) (rate(${hist}_bucket{${filter}}[${window}] @ ${anchor_ts}))) * ${scale}"
 }
 
 # Run one traffic-gen phase at the requested rate against the compose
@@ -162,16 +169,20 @@ run_and_assert_phase() {
   pre_flushed=$(query 'sum(markup_decision_sink_flushed_total)' 0)
 
   run_phase "$rate" "$seconds"
-  wait_for_sample "sum(rate(markup_decide_total[${window}]))" \
-    || { fail "Prometheus did not deliver a markup_decide_total sample within 30s of phase end"; FAILED=1; }
+  local phase_end_ts
+  phase_end_ts=$(date +%s)
+  note "phase ended at ts=${phase_end_ts}; waiting 30s for prom settle"
+  sleep 30
+  wait_for_sample "sum(rate(markup_decide_total[${window}] @ ${phase_end_ts}))" \
+    || { fail "Prometheus did not deliver a markup_decide_total sample for the anchored window"; FAILED=1; }
 
-  note "asserting bars for phase: steady:${rate}"
+  note "asserting bars for phase: steady:${rate} (anchored at ts=${phase_end_ts})"
 
   # Layer A — driver via the markup-svc decide counter (the sidecar
   # traffic-gen does not expose its prom listener to the host, so we
   # observe the rate as it lands at the consumer).
   local driver_rate
-  driver_rate=$(query "sum(rate(markup_decide_total[${window}]))")
+  driver_rate=$(query "sum(rate(markup_decide_total[${window}] @ ${phase_end_ts}))")
   awk -v g="$driver_rate" -v t="$rate" 'BEGIN { d=(g-t)/t; if (d<0) d=-d; exit !(d <= 0.15) }' \
     && pass "Driver_RateMatchesTarget: ${driver_rate} ≈ ${rate} (±15%)" \
     || { fail "Driver_RateMatchesTarget: ${driver_rate} vs ${rate} target"; FAILED=1; }
@@ -183,18 +194,18 @@ run_and_assert_phase() {
   # gateway latency needs its own histogram (parked in Not closed).
   local gw_req_p99 gw_upstream_p99 gw_err_rate
   gw_req_p99=$(p99_ms "traces_spanmetrics_duration_milliseconds" \
-    'service_name="decision-gateway",span_kind="SPAN_KIND_SERVER"' "$window")
+    'service_name="decision-gateway",span_kind="SPAN_KIND_SERVER"' "$window" "$phase_end_ts")
   gw_upstream_p99=$(p99_ms "traces_spanmetrics_duration_milliseconds" \
-    'service_name="decision-gateway",span_name="gateway.proxy.upstream"' "$window")
-  gw_err_rate=$(query "sum(rate(gateway_requests_total{status=~\"5..\"}[${window}])) / sum(rate(gateway_requests_total[${window}]))" 0)
-  assert_le "Gateway_RequestP99 (ms)" "$gw_req_p99" 5000
-  assert_le "Gateway_UpstreamP99 (ms)" "$gw_upstream_p99" 5000
+    'service_name="decision-gateway",span_name="gateway.proxy.upstream"' "$window" "$phase_end_ts")
+  gw_err_rate=$(query "sum(rate(gateway_requests_total{status=~\"5..\"}[${window}] @ ${phase_end_ts})) / sum(rate(gateway_requests_total[${window}] @ ${phase_end_ts}))" 0)
+  assert_le "Gateway_RequestP99 (ms)" "$gw_req_p99" 10
+  assert_le "Gateway_UpstreamP99 (ms)" "$gw_upstream_p99" 8
   assert_le "Gateway_ErrorRate" "$gw_err_rate" 0.001
 
   # Layer C — markup-svc
   local mk_p99 mk_err_rate
-  mk_p99=$(p99_ms "markup_decide_duration_seconds" '' "$window")
-  mk_err_rate=$(query "sum(rate(markup_decide_total{outcome=\"error\"}[${window}])) / sum(rate(markup_decide_total[${window}]))" 0)
+  mk_p99=$(p99_ms "markup_decide_duration_seconds" '' "$window" "$phase_end_ts")
+  mk_err_rate=$(query "sum(rate(markup_decide_total{outcome=\"error\"}[${window}] @ ${phase_end_ts})) / sum(rate(markup_decide_total[${window}] @ ${phase_end_ts}))" 0)
   assert_le "Markup_DecideP99 (ms)" "$mk_p99" 5
   assert_le "Markup_ErrorRate" "$mk_err_rate" 0.001
 
@@ -213,11 +224,11 @@ run_and_assert_phase() {
   assert_ge "Sink_FlushedRateMatchesProduction" "$flush_ratio" 0.95
 
   local bytes_delta
-  bytes_delta=$(query "sum(increase(markup_decision_sink_flushed_bytes_total[${window}]))" 0)
+  bytes_delta=$(query "sum(increase(markup_decision_sink_flushed_bytes_total[${window}] @ ${phase_end_ts}))" 0)
   assert_ge "Sink_AtLeastOneByteFlushedPerPhase" "$bytes_delta" 1
 
   local objects_delta
-  objects_delta=$(query "sum(increase(markup_decision_sink_objects_total[${window}]))" 0)
+  objects_delta=$(query "sum(increase(markup_decision_sink_objects_total[${window}] @ ${phase_end_ts}))" 0)
   assert_ge "Sink_AtLeastOneObjectFlushedPerPhase" "$objects_delta" 1
 }
 
