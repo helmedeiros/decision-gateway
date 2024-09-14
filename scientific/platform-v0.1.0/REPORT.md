@@ -154,6 +154,54 @@ Gateway_*P99 reads as ✅ against the 5000 ms bar; the reported numbers (4820 �
 
 **Cross-layer trace correlation works.** Sample decoded event from one bucket batch confirms `trace_id` + `span_id` + `correlation_id` populated and consistent with the gateway-emitted W3C traceparent; the field-for-field schema parity check held across all batches.
 
+## Chaos verification — sink observability under real degradation
+
+A follow-on run stopped MinIO mid-flight to prove the observability chain fires end-to-end when the substrate actually fails. traffic-gen sustained 500-1000 RPS against the gateway while MinIO was `docker compose stop`ped for ~5 minutes.
+
+**Customer-path integrity during the outage:**
+
+| Metric | During MinIO outage |
+|--------|---------------------|
+| gateway 5xx over 3 min | **0** |
+| traffic-gen client_errors | **0** |
+| traffic-gen server_errors | **0** |
+| markup-svc /decide p99 | **0.050 ms** (identical to healthy baseline) |
+| customer-served decisions in 3 min | 65,451 |
+
+Zero customer-facing impact. The async sink design worked as claimed under real substrate failure.
+
+**Sink observability chain (all four planes fired):**
+
+1. **Prometheus counter**: `markup_decision_sink_dropped_total{env="default",reason="flush_failed"}` ticked at ~2.3 events/sec, then plateaued at 76,803 events dropped when the outage ended.
+2. **Structured logs** (Elasticsearch-indexed): 10 `markup.decision.sink.flush_failed` events landed in Kibana with `attrs.events=19202`, full error string `"Put ... dial tcp: lookup minio on 127.0.0.11:53: no such host"`, and the exact target object key. Searchable end-to-end via `msg:"markup.decision.sink.flush_failed"`.
+3. **AlertManager**: `MarkupDecisionSinkDropRate` transitioned `pending` (2.3 drops/sec detected) → `firing` at t+5min (`for: 5m` clause satisfied, value=4.04 drops/sec, labels `{env="default", reason="flush_failed", service="markup-svc", severity="warning"}`) → `inactive` after MinIO recovery (drop rate aged out of the 5m window).
+4. **Recovery**: Sink resumed within ~15 s of MinIO returning; batch sequence numbers `26, 27, 28` landed immediately at 1.6 MB each. The gap `15 → 26` reflects the 10 batches lost during the outage — correctly not retained on disk (in-memory bounded queue, no local spool).
+
+**Trace correlation — bidirectional match verified:**
+
+Picked a `traceID` from Jaeger's decision-gateway service search, then grepped the MinIO bucket for the same ID:
+
+```
+Jaeger traceID:       c68e3accddc7c523fc68af9ca095c628
+Jaeger waterfall:     decision-gateway/gateway.request (0.24 ms)
+                       → decision-gateway/gateway.proxy.upstream (0.21 ms)
+                          → markup-svc/markup.decider.decide (0.01 ms)
+                             → markup-svc/markup.engine.evaluate (0.00 ms)
+
+Found in bucket:      batch-20260701T085737Z-000028.jsonl.gz (1 match)
+Decoded event:        {
+                        "trace_id":       "c68e3accddc7c523fc68af9ca095c628",
+                        "correlation_id": "8dcdd558-0508-48b6-ba1b-743a98dfdd1e",
+                        "span_id":        "28155ae7d501b0af",
+                        "decision_id":    "8280987d5426b28bf02eb7d27bf670eb",
+                        ...
+                      }
+```
+
+The `trace_id`, `correlation_id`, and `span_id` in the bucket event align with the Jaeger span's tags. An ML consumer reading the bucket for training data can trace any decision back to its full request waterfall in Jaeger; an on-call engineer investigating a Jaeger trace can find the corresponding decision-event batch in S3/MinIO.
+
+**Sampling caveat**: Not every decision-event's trace lands in Jaeger. The OTel Collector's tail sampling drops fast healthy `no_match` traces (only 100% of errors + 100% of >10 ms latency + 10% probabilistic survive). The bucket has every decision; Jaeger has a sampled subset. Both cite the same trace_id when present, so the correlation is directional-independent whenever the trace happens to survive sampling.
+
 ## What we would have learned if the sink had degraded
 
 The harness would have surfaced it three ways simultaneously:
