@@ -213,8 +213,12 @@ run_and_assert_phase() {
   assert_ge "Sink_FlushedRateMatchesProduction" "$flush_ratio" 0.95
 
   local bytes_delta
-  bytes_delta=$(query "sum(increase(markup_decision_sink_flushed_bytes_total[${window}]))")
+  bytes_delta=$(query "sum(increase(markup_decision_sink_flushed_bytes_total[${window}]))" 0)
   assert_ge "Sink_AtLeastOneByteFlushedPerPhase" "$bytes_delta" 1
+
+  local objects_delta
+  objects_delta=$(query "sum(increase(markup_decision_sink_objects_total[${window}]))" 0)
+  assert_ge "Sink_AtLeastOneObjectFlushedPerPhase" "$objects_delta" 1
 }
 
 # Warmup: drive a low-rate workload so container-init samples drop
