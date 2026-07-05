@@ -216,6 +216,36 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
+  # pricing-metrics-aggregator: polls funnel-events on a rolling window,
+  # publishes last-window gauges to Prometheus for Grafana + AlertManager.
+  # The always-on continuous complement to pricing-observability's
+  # notebooks (which are the on-demand analytical surface). See the
+  # sibling service's ADR-0001 for the wider role framing.
+  pricing-metrics-aggregator:
+    image: ghcr.io/helmedeiros/pricing-metrics-aggregator:main
+    depends_on:
+      minio:
+        condition: service_healthy
+    command:
+      - --listen=:8082
+      - --env=default
+      - --bucket=funnel-events
+      - --event-source-endpoint=minio:9000
+      - --event-source-access-key=minio
+      - --event-source-secret-key=minio12345
+      - --interval=1m
+      - --warmup=3s
+      - --otel-enabled
+    environment:
+      - OTEL_SERVICE_NAME=pricing-metrics-aggregator
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://host.docker.internal:4317
+      - OTEL_EXPORTER_OTLP_PROTOCOL=grpc
+      - OTEL_TRACES_SAMPLER=parentbased_always_on
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8082:8082"
+
   # ADR-0036 (markup-svc) decision-event substrate. MinIO speaks the
   # S3 API; the s3sink adapter in markup-svc points at it via the
   # --decision-sink-endpoint flag above. The console (port 9001) gives
