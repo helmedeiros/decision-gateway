@@ -152,6 +152,42 @@ services:
       # compose network the registry stays on 8090.
       - "8091:8090"
 
+  # funnel-sim: stand-in for real search-svc / booking-svc / payment-svc.
+  # Consumes /search / /booking/* HTTP calls, fans them out to markup-svc
+  # for pricing, and emits search.v1 + booking.v1 events into the
+  # funnel-events/ MinIO bucket. See funnel-sim ADR-0001 for the wider
+  # role framing (layered-swap architecture: this service is the
+  # downstream-services axis; traffic-gen is the customer axis).
+  funnel-sim:
+    image: ghcr.io/helmedeiros/funnel-sim:main
+    depends_on:
+      markup-svc:
+        condition: service_started
+      minio:
+        condition: service_healthy
+    command:
+      - --listen=:8081
+      - --env=default
+      - --markup-url=http://markup-svc:8080/decide
+      - --otel-enabled
+      - --metrics-enabled
+      - --event-sink=s3
+      - --event-sink-endpoint=minio:9000
+      - --event-sink-bucket=funnel-events
+      - --event-sink-bucket-auto-create
+      - --event-sink-access-key=minio
+      - --event-sink-secret-key=minio12345
+      - --event-sink-batch-every=15s
+    environment:
+      - OTEL_SERVICE_NAME=funnel-sim
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://host.docker.internal:4317
+      - OTEL_EXPORTER_OTLP_PROTOCOL=grpc
+      - OTEL_TRACES_SAMPLER=parentbased_always_on
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8081:8081"
+
   traffic-gen:
     image: ghcr.io/helmedeiros/traffic-gen:v0.0.8
     depends_on:
