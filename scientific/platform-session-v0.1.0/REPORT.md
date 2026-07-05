@@ -12,6 +12,8 @@ Measured values for the pre-registered bars in [`README.md`](README.md). Harness
 | Customer tier | enterprise |
 | Aggregator interval | 1 minute (compose default) |
 | Propagation wait | 70 s |
+| PromQL rate windows | 5 m (widened from 2 m — 2 m runs degenerate on 12 s traffic) |
+| Prometheus scrape targets | markup-svc `:18080` (via `pricing-observability/docker-compose.scientific-override.yaml`), funnel-sim `:8081` (added to `prometheus.yml` in this session), aggregator `:8082` |
 
 ## traffic-gen session totals
 
@@ -34,42 +36,42 @@ Bars pre-registered in [README.md](README.md). Measured column filled in from th
 
 | Bar | Threshold | Measured | Status |
 |---|---|---|---|
-| `Funnel_SearchP99` | ≤ 20 ms | 0 ms | ✅ PASS (0 = no samples in the 2m PromQL window; harness anchored on end_ts and the /search calls fell inside; passes trivially) |
-| `Funnel_BookingInitP99` | ≤ 5 ms | 0 ms | ✅ PASS (same window semantics) |
+| `Funnel_SearchP99` | ≤ 20 ms | **4.73 ms** | ✅ PASS |
+| `Funnel_BookingInitP99` | ≤ 5 ms | **0.20 ms** | ✅ PASS |
 | `Funnel_ErrorRate` | ≤ 0.001 | 0 | ✅ PASS |
 | `Funnel_SinkDropRateIsZero` | = 0 | 0 | ✅ PASS |
 
-**Caveat noted for the next iteration.** `Funnel_SearchP99` and `Funnel_BookingInitP99` returned 0 because the 2 m rate window ran short of samples at the propagation-wait boundary. The bar is satisfied (0 ≤ 20 ms) but the number is degenerate. A future harness should either widen the window to 5 m, run a longer traffic phase, or drop the histogram bars in favor of counter deltas.
+funnel-sim `/search` at ~5 ms p99 is honest — that's the wall-clock of the N-way markup-svc fan-out (3 offers × ~0.07 ms per decide + JSON encode + sink enqueue + span emit). `/booking/init` at 0.2 ms is a pure state-map insert.
 
 ### Layer C — markup-svc
 
 | Bar | Threshold | Measured | Status |
 |---|---|---|---|
-| `Markup_DecideP99` | ≤ 5 ms | — | ⏭️ SKIPPED |
-| `Markup_DecideOkRate` | ≥ 0 | — | ⏭️ SKIPPED |
+| `Markup_DecideP99` | ≤ 5 ms | **0.07 ms** | ✅ PASS |
+| `Markup_DecideOkRate` | ≥ 0 | **68,439 in 5m window** | ✅ PASS |
 
-**Skipped** — pre-existing config drift: `docker-compose.scientific-override.yaml` remaps markup-svc host port `8080 → 18080` (Java-on-8080 collision workaround) but `pricing-observability/config/prometheus.yml`'s scrape target still points at `host.docker.internal:8080`. Prometheus can't reach markup-svc's `/metrics`. Not a session-mode arc regression — the same drift blocks the sibling harness's Markup bars. Fix parked as a separate follow-on (add `pricing-observability/docker-compose.scientific-override.yaml` mounting a patched Prometheus config).
+The 0.07 ms p99 is the engine decide + JSON encode budget. 68k `ok` decisions in the 5m window include historical background traffic — the harness only pre-registered ≥ 0 for OkRate (the important assertion is that markup-svc is being scraped at all).
 
 ### Layer D — pricing-metrics-aggregator
 
 | Bar | Threshold | Measured | Status |
 |---|---|---|---|
-| `Agg_ImpressionsMin` | ≥ 10 | 123 | ✅ PASS |
-| `Agg_PurchasesMin` | ≥ 1 | 24 | ✅ PASS |
-| `Agg_ConversionRateMin` | ≥ 0.05 | 0.1951 | ✅ PASS |
-| `Agg_TrafficGenMatch` | ≤ 0.15 | 0.0000 | ✅ PASS |
+| `Agg_ImpressionsMin` | ≥ 10 | **108** | ✅ PASS |
+| `Agg_PurchasesMin` | ≥ 1 | **21** | ✅ PASS |
+| `Agg_ConversionRateMin` | ≥ 0.05 | **0.1944** | ✅ PASS |
+| `Agg_TrafficGenMatch` | ≤ 0.15 | **0.0000** | ✅ PASS |
 | `Agg_RunFailureRateIsZero` | = 0 | 0 | ✅ PASS |
 
-The aggregator's `pricing_impressions_last_window` (123) matched traffic-gen's `expected_impressions` (123) **exactly**. The join between the funnel-events bucket walk and the aggregator's Prometheus emission introduced ZERO drift on this run.
+The aggregator's `pricing_impressions_last_window` (108) matched traffic-gen's `expected_impressions` (36 searches × 3 offers = 108) **exactly**. The join between the funnel-events bucket walk and the aggregator's Prometheus emission introduced ZERO drift.
 
 Ancillary aggregator readings:
 
 | Metric | Value |
 |---|---|
-| `pricing_walkoffs_at_init_last_window` | 10 (traffic-gen said 11; ±1 boundary-noise) |
-| `pricing_walkoffs_at_reserve_last_window` | 3 |
-| `pricing_gmv_last_window_eur` | 1402.72 |
-| `pricing_conversion_rate_last_window` | 0.1951 (24 / 123) |
+| `pricing_walkoffs_at_init_last_window` | 4 (traffic-gen said 4; exact match) |
+| `pricing_walkoffs_at_reserve_last_window` | 7 (traffic-gen said 8; ±1 boundary noise) |
+| `pricing_gmv_last_window_eur` | 1244.63 |
+| `pricing_conversion_rate_last_window` | 0.1944 (21/108) |
 
 ### Layer E — Jaeger
 
@@ -78,24 +80,22 @@ Ancillary aggregator readings:
 | `Jaeger_ServicesMin` | ≥ 4 | 4 | ✅ PASS (`traffic-gen`, `funnel-sim`, `markup-svc`, `decision-gateway`) |
 | `Jaeger_MultiServiceTracesMin` | ≥ 1 | 25 | ✅ PASS |
 
-25 distinct traces in the last hour joined 3+ services. The W3C traceparent propagates through the whole traffic-gen → funnel-sim → markup-svc chain end-to-end.
+25 distinct traces joined 3+ services. The W3C traceparent propagates through the whole traffic-gen → funnel-sim → markup-svc chain end-to-end.
 
 ### Layer F — MinIO
 
 | Bar | Threshold | Measured | Status |
 |---|---|---|---|
-| `MinIO_SearchBatchesMin` | ≥ 1 | 10 | ✅ PASS |
-| `MinIO_BookingBatchesMin` | ≥ 1 | 38 | ✅ PASS |
+| `MinIO_SearchBatchesMin` | ≥ 1 | 13 | ✅ PASS |
+| `MinIO_BookingBatchesMin` | ≥ 1 | 50 | ✅ PASS |
 
-Hive partitions populated across all four booking event_types (initiated, reserved, purchased, timeout).
+Hive partitions populated across all four booking `event_type=` partitions.
 
 ### Layer G — Elasticsearch
 
 | Bar | Threshold | Measured | Status |
 |---|---|---|---|
-| `ES_FunnelAccessLogsMin` | ≥ 1 | 716 | ✅ PASS |
-
-`funnel-sim.access` events land in `platform-logs-*` with `trace_id`, `duration_ms`, `path` populated.
+| `ES_FunnelAccessLogsMin` | ≥ 1 | 1,005 | ✅ PASS |
 
 ### Layer H — AlertManager
 
@@ -104,11 +104,13 @@ Hive partitions populated across all four booking event_types (initiated, reserv
 | `Alerts_LoadedCount` | = 4 | 4 | ✅ PASS |
 | `Alerts_AllInactiveUnderNominal` | 0 firing | 0 | ✅ PASS |
 
-All four `pricing-metrics-aggregator` group rules loaded (per pricing-observability ADR-0022) and evaluated to `inactive` under the nominal traffic mix.
-
 ## Aggregate verdict
 
-**PASS across all measured layers.** One skip (Markup layer) documented above as a pre-existing config drift orthogonal to this arc's scope.
+**PASS across every measured layer.** Zero skips this run — the two config gaps flagged in the pre-registration commit (missing funnel-sim scrape target, missing pricing-observability scientific-override) were both closed in the measurement commit:
+
+- Added `funnel-sim` scrape target to `pricing-observability/config/prometheus.yml` (host.docker.internal:8081).
+- Added `pricing-observability/docker-compose.scientific-override.yaml` + a sibling `config/prometheus-scientific-override.yml` that swaps the markup-svc scrape port from `:8080` to `:18080` when the platform scientific-override is in effect.
+- Widened all PromQL rate windows in the harness from 2 m to 5 m — 2 m runs degenerate on 12 s of traffic even with correct scraping.
 
 The session-mode Learning Loop pipeline flows end-to-end:
 
@@ -124,9 +126,8 @@ traffic-gen [session=4]
 
 ## Follow-ons
 
-- **Widen the funnel-sim histogram window** or drop the p99 bars in favor of counter-delta bars — the 0 ms measurement reads honest-passing but degenerate.
-- **Add the pricing-observability scientific-override** so the Markup layer bars can run instead of skipping. Same repo, small change (patch prometheus.yml scrape target to `:18080`).
-- **Add a labeled-surface variant** — `platform-session-labeled-v0.1.0` — that runs the aggregator with `--include-labels=variant,customer_tier` and adds per-arm / per-segment bars. Blocked until markup-svc's router is configured with two named experiment arms.
+- **Add a labeled-surface variant** — `platform-session-labeled-v0.1.0` — that runs the aggregator with `--include-labels=variant,customer_tier` and adds per-arm / per-segment bars. Blocked until markup-svc's router is configured with two named experiment arms (config-only, no code changes needed on the aggregator or harness side).
+- **Sustained-load variant** — this harness is a functional verification at ~3 QPS. Sustained-load bars (500+ QPS session mode) belong in a future `platform-session-sustained-v0.1.0/` following the same pattern as the pre-Learning-Loop rate-mode sibling.
 
 ## Cross-references
 

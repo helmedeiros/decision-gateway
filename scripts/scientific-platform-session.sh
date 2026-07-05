@@ -12,9 +12,11 @@
 #   - decision-gateway compose stack up (with the scientific-override):
 #       docker compose -f docker-compose.yaml \
 #                      -f docker-compose.scientific-override.yaml up -d
-#   - pricing-observability stack up:
+#   - pricing-observability stack up (with its scientific-override
+#     so Prometheus scrapes markup-svc on the remapped :18080 port):
 #       cd ../pricing-observability &&
-#       docker compose -f docker-compose.observability.yaml up -d
+#       docker compose -f docker-compose.observability.yaml \
+#                      -f docker-compose.scientific-override.yaml up -d
 #   - Local traffic-gen binary at $TG_BIN (default /tmp/traffic-gen).
 #
 # Env knobs:
@@ -150,10 +152,10 @@ PHASE_END_TS=$(date +%s)
 
 # --- Layer B — funnel-sim latency + errors ---------------------------
 note "Layer B — funnel-sim"
-FUNNEL_SEARCH_P99=$(query "histogram_quantile(0.99, sum by(le) (rate(funnel_sim_request_duration_seconds_bucket{path=\"/search\"}[2m] @ $PHASE_END_TS))) * 1000")
-FUNNEL_INIT_P99=$(query   "histogram_quantile(0.99, sum by(le) (rate(funnel_sim_request_duration_seconds_bucket{path=\"/booking/init\"}[2m] @ $PHASE_END_TS))) * 1000")
-FUNNEL_ERR_RATE=$(query   "sum(rate(funnel_sim_requests_total{status_class=~\"[45]xx\"}[2m] @ $PHASE_END_TS)) / sum(rate(funnel_sim_requests_total[2m] @ $PHASE_END_TS))" 0)
-FUNNEL_DROPS=$(query      "sum(increase(funnel_event_sink_dropped_total[2m] @ $PHASE_END_TS))" 0)
+FUNNEL_SEARCH_P99=$(query "histogram_quantile(0.99, sum by(le) (rate(funnel_sim_request_duration_seconds_bucket{path=\"/search\"}[5m] @ $PHASE_END_TS))) * 1000")
+FUNNEL_INIT_P99=$(query   "histogram_quantile(0.99, sum by(le) (rate(funnel_sim_request_duration_seconds_bucket{path=\"/booking/init\"}[5m] @ $PHASE_END_TS))) * 1000")
+FUNNEL_ERR_RATE=$(query   "sum(rate(funnel_sim_requests_total{status_class=~\"[45]xx\"}[5m] @ $PHASE_END_TS)) / sum(rate(funnel_sim_requests_total[5m] @ $PHASE_END_TS))" 0)
+FUNNEL_DROPS=$(query      "sum(increase(funnel_event_sink_dropped_total[5m] @ $PHASE_END_TS))" 0)
 assert_le      "Funnel_SearchP99 (ms)"    "$FUNNEL_SEARCH_P99" 20
 assert_le      "Funnel_BookingInitP99 (ms)" "$FUNNEL_INIT_P99"   5
 assert_le      "Funnel_ErrorRate"         "$FUNNEL_ERR_RATE"    0.001
@@ -161,8 +163,8 @@ assert_eq_zero "Funnel_SinkDropRateIsZero" "$FUNNEL_DROPS"
 
 # --- Layer C — markup-svc --------------------------------------------
 note "Layer C — markup-svc"
-MK_P99=$(query "histogram_quantile(0.99, sum by(le) (rate(markup_decide_duration_seconds_bucket[2m] @ $PHASE_END_TS))) * 1000")
-MK_OK_DELTA=$(query "sum(increase(markup_decide_total{outcome=\"ok\"}[2m] @ $PHASE_END_TS))" 0)
+MK_P99=$(query "histogram_quantile(0.99, sum by(le) (rate(markup_decide_duration_seconds_bucket[5m] @ $PHASE_END_TS))) * 1000")
+MK_OK_DELTA=$(query "sum(increase(markup_decide_total{outcome=\"ok\"}[5m] @ $PHASE_END_TS))" 0)
 if [ "$MK_P99" = "0" ] && [ "$MK_OK_DELTA" = "0" ]; then
   warn "markup-svc metrics not scraped — likely a Prometheus scrape-target config drift against docker-compose.scientific-override.yaml's port remap. Skipping the Markup layer assertions."
 else
@@ -178,7 +180,7 @@ AGG_WI=$(query  "sum(pricing_walkoffs_at_init_last_window)")
 AGG_WR=$(query  "sum(pricing_walkoffs_at_reserve_last_window)")
 AGG_GMV=$(query "sum(pricing_gmv_last_window_eur)")
 AGG_CV=$(query  "avg(pricing_conversion_rate_last_window)")
-AGG_ERR_RUNS=$(query "sum(increase(pricing_metrics_aggregator_runs_total{outcome=\"error\"}[2m] @ $PHASE_END_TS))" 0)
+AGG_ERR_RUNS=$(query "sum(increase(pricing_metrics_aggregator_runs_total{outcome=\"error\"}[5m] @ $PHASE_END_TS))" 0)
 note "aggregator: imp=$AGG_IMP pur=$AGG_PUR wi=$AGG_WI wr=$AGG_WR gmv=$AGG_GMV cv=$AGG_CV"
 assert_ge      "Agg_ImpressionsMin"      "$AGG_IMP"      10
 assert_ge      "Agg_PurchasesMin"        "$AGG_PUR"      1
